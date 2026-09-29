@@ -99,6 +99,29 @@ export async function getRelatedProducts(product: Product, limit = 4) {
   return rows.map((row) => toProduct({ ...row.product, category: row.category }));
 }
 
+export async function getCategorySlugs() {
+  const rows = await db.select({ slug: categories.slug }).from(categories);
+  return rows.map((row) => row.slug);
+}
+
+/** Deduplicated per request, so metadata and the page share one query. */
+export const getCategoryBySlug = cache(async (slug: string) => {
+  return db.query.categories.findFirst({
+    where: eq(categories.slug, slug),
+    columns: { id: true, slug: true, name: true },
+  });
+});
+
+/** Products in one category, newest first. */
+export async function getCategoryProducts(categoryId: number) {
+  const rows = await db.query.products.findMany({
+    where: eq(products.categoryId, categoryId),
+    with: withCategory,
+    orderBy: [desc(products.createdAt), desc(products.id)],
+  });
+  return rows.map(toProduct);
+}
+
 /** Categories with a tile image, in display order. */
 export async function getCategories(): Promise<Category[]> {
   const rows = await db

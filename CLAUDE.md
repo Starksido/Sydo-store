@@ -23,7 +23,7 @@ No test framework is set up yet.
 
 - `src/db/index.ts` — single Drizzle client (`db`) over Neon's HTTP driver (`drizzle-orm/neon-http`). Throws at import if `DATABASE_URL` is unset, so anything importing `@/db` (including the auth route) needs it at build time too.
 - `src/db/schema.ts` — all Drizzle tables; imported into the client as `schema` and referenced by `drizzle.config.ts`. Holds `categories` and `products`. Better Auth's `user`, `session`, `account`, `verification` tables don't exist yet, and Better Auth logs a "Drizzle schema mismatch" error during build until they're generated and migrated.
-- `src/lib/auth.ts` — server-side Better Auth instance using `drizzleAdapter(db, { provider: "pg" })`. No sign-in methods enabled yet. Server code gets sessions from `auth.api.*`.
+- `src/lib/auth.ts` — server-side Better Auth instance using `drizzleAdapter(db, { provider: "pg" })`. Refuses to load (so dev, build and start all fail) unless `BETTER_AUTH_SECRET` is 32+ random bytes as hex/base64 — don't relax this or fall back to Better Auth's default secret. No sign-in methods enabled yet. Server code gets sessions from `auth.api.*`.
 - `src/app/api/auth/[...all]/route.ts` — mounts Better Auth via `toNextJsHandler(auth)`.
 - `src/lib/products.ts` — product/category queries and the `Product`/`ProductSize`/`Category` types components use.
 - `src/lib/catalog.ts` — static editorial content (hero, featured collections, campaign, services, nav) and display helpers (`formatPrice`, `stockState`/`stockLabel`, `categoryHref`, `unsplash()` image URLs, optionally with focal-point close-up crops).

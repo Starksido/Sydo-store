@@ -15,13 +15,9 @@ export function NewsletterForm() {
   }
 
   return (
-    <form
-      className="flex flex-col gap-4 sm:flex-row sm:items-end"
-      onSubmit={(event) => {
-        event.preventDefault();
-        setSubmitted(true);
-      }}
-    >
+    // A function `action` (not onSubmit) keeps the form from natively submitting
+    // before hydration, which would put the email address in a GET URL.
+    <form className="flex flex-col gap-4 sm:flex-row sm:items-end" action={() => setSubmitted(true)}>
       <label className="flex-1">
         <span className="sr-only">Email address</span>
         <input
