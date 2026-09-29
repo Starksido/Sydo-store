@@ -19,6 +19,12 @@ import { stockDecrementCtes, stockIncrementCtes } from "@/lib/stock";
  */
 export const PAYMENT_HOLD_MINUTES = 30;
 
+/**
+ * Payment attempts one order may start. Each open attempt costs a Paystack check in every expiry
+ * sweep, so this bounds how much work one customer's clicks can make.
+ */
+export const MAX_PAYMENT_ATTEMPTS = 10;
+
 const PAID_STATUSES = new Set(["paid", "processing", "shipped", "delivered"]);
 
 /** The app's public base URL, from configuration rather than the request's Host header. */
@@ -30,23 +36,31 @@ function appUrl() {
 
 export type StartPaymentResult =
   | { ok: true; authorizationUrl: string }
-  /** No such order for this user; the order isn't awaiting payment; or Paystack failed. */
-  | { ok: false; reason: "not-found" | "not-payable" | "unavailable" };
+  /**
+   * No such order for this user; the order isn't awaiting payment; it has started
+   * MAX_PAYMENT_ATTEMPTS already; or Paystack failed.
+   */
+  | { ok: false; reason: "not-found" | "not-payable" | "too-many-attempts" | "unavailable" };
 
 /**
  * Starts a Paystack payment attempt for the user's pending order and returns Paystack's checkout
  * URL. The amount is the order total from the database. The attempt is recorded before Paystack is
- * called, so any webhook for it finds it. Refuses orders past their payment window.
+ * called, so any webhook for it finds it. Refuses orders past their payment window, and orders that
+ * have used their MAX_PAYMENT_ATTEMPTS.
  */
 export async function startPayment(userId: string, email: string, orderReference: string): Promise<StartPaymentResult> {
   const base = appUrl();
   const reference = `${orderReference}-${randomCode(8)}`;
   // Locks the order, so an expiry sweep running at the same moment either sees this attempt or
-  // has already expired the order (which then isn't selected).
+  // has already expired the order (which then isn't selected). The attempt count comes from this
+  // statement's snapshot, so attempts started at the very same moment can go a few over the limit;
+  // it only has to bound the work, not be exact.
   // `amount` is a bigint, which the driver returns as a string.
-  const { rows } = await db.execute<{ order_id: number; amount: string; started: boolean }>(sql`
+  const { rows } = await db.execute<{ order_id: number; amount: string; payable: boolean; started: boolean }>(sql`
     with o as (
-      select id, total, status, created_at
+      select id, total, status, created_at,
+        status = 'pending_payment'
+          and created_at > now() - make_interval(mins => ${PAYMENT_WINDOW_MINUTES}) as payable
       from orders
       where reference = ${orderReference} and user_id = ${userId}
       for update
@@ -55,17 +69,18 @@ export async function startPayment(userId: string, email: string, orderReference
       insert into payments (order_id, reference, amount)
       select id, ${reference}, total
       from o
-      where status = 'pending_payment'
-        and created_at > now() - make_interval(mins => ${PAYMENT_WINDOW_MINUTES})
+      where payable
+        and (select count(*) from payments p where p.order_id = o.id) < ${MAX_PAYMENT_ATTEMPTS}
       returning order_id, amount
     )
-    select o.id as order_id, o.total as amount, a.order_id is not null as started
+    select o.id as order_id, o.total as amount, o.payable, a.order_id is not null as started
     from o
     left join attempt a on a.order_id = o.id
   `);
   const row = rows.at(0);
   if (!row) return { ok: false, reason: "not-found" };
-  if (!row.started) return { ok: false, reason: "not-payable" };
+  if (!row.payable) return { ok: false, reason: "not-payable" };
+  if (!row.started) return { ok: false, reason: "too-many-attempts" };
 
   try {
     const { authorizationUrl } = await initializeTransaction({
@@ -207,13 +222,14 @@ export async function confirmPayment(reference: string): Promise<ConfirmPaymentR
 /**
  * Expires orders still unpaid PAYMENT_WINDOW_MINUTES after they were placed and returns their
  * stock. First re-checks their open payment attempts with Paystack, so a payment whose webhook
- * hasn't arrived isn't lost; orders that can't be checked right now are left for the next run.
- * Orders with an attempt started in the last PAYMENT_HOLD_MINUTES are left too. Returns the
- * references of the orders it expired. Safe to run concurrently.
+ * hasn't arrived isn't lost. An order is only expired once this run has checked every attempt of it
+ * that's still open, so orders it couldn't check (Paystack unreachable, or past `limit` attempts)
+ * are left for the next run. Orders with an attempt started in the last PAYMENT_HOLD_MINUTES are
+ * left too. Returns the references of the orders it expired. Safe to run concurrently.
  */
 export async function expireUnpaidOrders({ limit = 100 }: { limit?: number } = {}) {
-  const { rows: open } = await db.execute<{ reference: string; order_id: number }>(sql`
-    select p.reference, p.order_id
+  const { rows: open } = await db.execute<{ reference: string }>(sql`
+    select p.reference
     from payments p
     join orders o on o.id = p.order_id
     where o.status = 'pending_payment'
@@ -222,13 +238,14 @@ export async function expireUnpaidOrders({ limit = 100 }: { limit?: number } = {
     order by p.id
     limit ${limit}
   `);
-  const unchecked: number[] = [];
-  for (const { reference, order_id } of open) {
+  // Attempts Paystack answered for. Some stay pending (still open on Paystack, or a mismatch).
+  const checked: string[] = [];
+  for (const { reference } of open) {
     try {
       await confirmPayment(reference);
+      checked.push(reference);
     } catch (error) {
       console.error(`[payments] could not check ${reference} before expiry`, error);
-      unchecked.push(order_id);
     }
   }
 
@@ -241,7 +258,11 @@ export async function expireUnpaidOrders({ limit = 100 }: { limit?: number } = {
         from orders c
         where c.status = 'pending_payment'
           and c.created_at < now() - make_interval(mins => ${PAYMENT_WINDOW_MINUTES})
-          and c.id not in (select value::int from jsonb_array_elements_text(${JSON.stringify(unchecked)}::jsonb))
+          and not exists (
+            select 1 from payments p
+            where p.order_id = c.id and p.status = 'pending'
+              and p.reference not in (select jsonb_array_elements_text(${JSON.stringify(checked)}::jsonb))
+          )
           and not exists (
             select 1 from payments p
             where p.order_id = c.id and p.created_at > now() - make_interval(mins => ${PAYMENT_HOLD_MINUTES})

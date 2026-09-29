@@ -23,7 +23,10 @@ const FIELDS: DeliveryField[] = ["fullName", "phone", "county", "town", "address
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const CART_CHANGED = "Your bag has changed since you opened checkout. Please review it and try again.";
+/** Orders (and open payment attempts) the sweep after each checkout looks at. */
+const CHECKOUT_SWEEP_LIMIT = 10;
+
+const CART_CHANGED ="Your bag has changed since you opened checkout. Please review it and try again.";
 
 /** The lines rendered into the form, as `[{ lineId, quantity }]` JSON. Null if malformed. */
 function parseLines(value: FormDataEntryValue | null): CheckoutLine[] | null {
@@ -63,8 +66,13 @@ export async function placeOrderAction(_: PlaceOrderState, formData: FormData): 
 
   const result = await placeOrder(user.id, { checkoutKey, lines, delivery: delivery.delivery });
   if (result.ok) {
-    // Returns the stock of other customers' unpaid orders, between the scheduled sweeps.
-    after(() => expireUnpaidOrders().catch((error) => console.error("[payments] expiry sweep failed", error)));
+    // Returns the stock of other customers' unpaid orders, between the scheduled sweeps. A small
+    // batch, so each checkout makes at most a few Paystack checks; the scheduled sweep does the rest.
+    after(() =>
+      expireUnpaidOrders({ limit: CHECKOUT_SWEEP_LIMIT }).catch((error) =>
+        console.error("[payments] expiry sweep failed", error),
+      ),
+    );
 
     // The order exists now, so any failure to start payment sends the customer to the order page,
     // which offers to pay again, rather than showing an error.

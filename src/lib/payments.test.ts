@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { db } from "@/db";
 import { products } from "@/db/schema";
-import { confirmPayment, expireUnpaidOrders, startPayment } from "@/lib/payments";
+import { confirmPayment, expireUnpaidOrders, MAX_PAYMENT_ATTEMPTS, startPayment } from "@/lib/payments";
 
 import { createProduct, createUser, getStock, resetCatalog, setStock } from "../../tests/fixtures";
 import { ageOrder, agePayments, createOrder, getOrderRow, getPayments, setOrderStatus } from "../../tests/orders";
@@ -79,6 +79,18 @@ describe("startPayment", () => {
     expect(attempts).toHaveLength(2);
     expect(new Set(attempts.map((a) => a.reference)).size).toBe(2);
     expect(paystack.initialized.map((b) => b.reference)).toEqual(attempts.map((a) => a.reference));
+  });
+
+  it(`refuses a new attempt once the order has started ${MAX_PAYMENT_ATTEMPTS}`, async () => {
+    const { userId, reference } = await orderWithAttempt();
+    for (let i = 1; i < MAX_PAYMENT_ATTEMPTS; i++) {
+      expect((await startPayment(userId, EMAIL, reference)).ok).toBe(true);
+    }
+    const initialized = paystack.initialized.length;
+
+    expect(await startPayment(userId, EMAIL, reference)).toEqual({ ok: false, reason: "too-many-attempts" });
+    expect(await getPayments(reference)).toHaveLength(MAX_PAYMENT_ATTEMPTS);
+    expect(paystack.initialized).toHaveLength(initialized);
   });
 
   it("keeps the attempt, marked failed, when Paystack can't start it", async () => {
@@ -333,6 +345,24 @@ describe("expireUnpaidOrders", () => {
 
     paystack.settle(payment, { status: "abandoned" });
     expect(await expireUnpaidOrders()).toEqual([reference]);
+  });
+
+  it("doesn't expire an order whose open attempts it didn't get to check", async () => {
+    const { userId, reference, product } = await orderWithAttempt({ stock: 5, quantity: 2 });
+    await startPayment(userId, EMAIL, reference);
+    const [first, second] = (await getPayments(reference)).map((p) => p.reference);
+    await ageOrder(reference, 120);
+    await agePayments(reference, 90);
+    paystack.settle(first, { status: "ongoing" });
+    paystack.settle(second, { status: "ongoing" });
+
+    // Only the first attempt fits in this run, so the second is still unchecked.
+    expect(await expireUnpaidOrders({ limit: 1 })).toEqual([]);
+    expect((await getOrderRow(reference)).status).toBe("pending_payment");
+    expect([paystack.verifyCount(first), paystack.verifyCount(second)]).toEqual([1, 0]);
+
+    expect(await expireUnpaidOrders()).toEqual([reference]);
+    expect(await getStock(product)).toBe(5);
   });
 
   it("returns the stock once when two sweeps run at the same time", async () => {

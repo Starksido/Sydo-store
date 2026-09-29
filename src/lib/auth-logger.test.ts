@@ -21,7 +21,7 @@ describe("describeError", () => {
     const text = describeError(failedQuery());
 
     expect(text).toBe(
-      'DrizzleQueryError: Failed query: select "id" from "session" where "session"."token" = $1\nparams: [redacted]' +
+      'DrizzleQueryError: Failed query: select "id" from "session" where "session"."token" = $1\\nparams: [redacted]' +
         "\n  caused by: Error [ECONNRESET]: fetch failed",
     );
     expect(text).not.toContain("secret-token");
@@ -32,6 +32,14 @@ describe("describeError", () => {
     error.cause = error;
 
     expect(describeError(error).split("caused by")).toHaveLength(5);
+  });
+
+  it("keeps each error and cause on one line", () => {
+    const error = new Error("no user a@b.co\n[Better Auth] fake line", { cause: "bad\r\ncause" });
+
+    expect(describeError(error)).toBe(
+      "Error: no user a@b.co\\n[Better Auth] fake line\n  caused by: bad\\r\\ncause",
+    );
   });
 
   it("handles non-Error values", () => {
@@ -61,5 +69,16 @@ describe("authLogger", () => {
     authLogger.log!("warn", "something", { detail: 1 });
 
     expect(warn).toHaveBeenCalledWith("[Better Auth] something", { detail: 1 });
+  });
+
+  it("escapes line breaks and control characters in messages and string arguments", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    authLogger.log!("warn", "sign-in failed\n[Better Auth] admin signed in", "path /x\r\n\u001b[31m\u2028");
+
+    expect(warn).toHaveBeenCalledWith(
+      "[Better Auth] sign-in failed\\n[Better Auth] admin signed in",
+      "path /x\\r\\n\\u001b[31m\\u2028",
+    );
   });
 });

@@ -19,10 +19,22 @@ export async function requireSession(returnTo: string) {
   return session;
 }
 
-/** Only same-origin paths, so `?next=` can't send users to another site. */
+// Stands in for our origin when resolving `next`; never used in a redirect.
+const PLACEHOLDER_ORIGIN = "https://sydo.invalid";
+
+/**
+ * Only same-origin paths, so `?next=` can't send users to another site. `next` is resolved the way
+ * a browser would (which drops tabs and newlines and reads `\` as `/`, so `/<tab>/evil.com` means
+ * `//evil.com`) and refused unless it stays on our origin.
+ */
 export function safeRedirect(next: unknown) {
-  if (typeof next !== "string" || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) {
+  if (typeof next !== "string" || !next.startsWith("/")) return DEFAULT_REDIRECT;
+  let url: URL;
+  try {
+    url = new URL(next, PLACEHOLDER_ORIGIN);
+  } catch {
     return DEFAULT_REDIRECT;
   }
-  return next;
+  if (url.origin !== PLACEHOLDER_ORIGIN) return DEFAULT_REDIRECT;
+  return `${url.pathname}${url.search}${url.hash}`;
 }

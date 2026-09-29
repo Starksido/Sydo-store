@@ -20,11 +20,11 @@ export async function payOrderAction(reference: string): Promise<PayOrderState> 
 
   const payment = await startPayment(user.id, user.email, reference);
   if (payment.ok) redirect(payment.authorizationUrl);
-  return {
-    status: "error",
-    message:
-      payment.reason === "unavailable"
-        ? "We couldn't reach our payment provider. Please try again in a moment."
-        : "This order can no longer be paid. Refresh the page to see its status.",
+  const messages: Record<typeof payment.reason, string> = {
+    unavailable: "We couldn't reach our payment provider. Please try again in a moment.",
+    "too-many-attempts": "This order has had too many payment attempts. Please contact us to complete it.",
+    "not-found": "This order can no longer be paid. Refresh the page to see its status.",
+    "not-payable": "This order can no longer be paid. Refresh the page to see its status.",
   };
+  return { status: "error", message: messages[payment.reason] };
 }

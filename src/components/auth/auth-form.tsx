@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState } from "react";
 
+import { authErrorMessage } from "@/components/auth/auth-error";
 import { authClient } from "@/lib/auth-client";
 
 const input =
@@ -21,7 +22,7 @@ export function AuthForm({ mode, next }: { mode: "sign-in" | "sign-up"; next: st
       ? await authClient.signUp.email({ name: String(formData.get("name")), email, password })
       : await authClient.signIn.email({ email, password });
 
-    if (error) return error.message ?? "Something went wrong. Please try again.";
+    if (error) return authErrorMessage(mode, error);
     router.replace(next);
     router.refresh();
     return null;
