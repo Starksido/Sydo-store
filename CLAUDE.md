@@ -32,7 +32,7 @@ No test framework is set up yet.
 
 ## Database conventions
 
-- **Scope:** the catalog is only `categories` and `products`; carts are `carts` (one per user) and `cart_items` (one row per product + size), signed-in users only, with no price column. Don't add guest carts, orders, payments, discounts, reviews, wishlists or product variants unless asked.
+- **Scope:** the catalog is only `categories` and `products`; carts are `carts` (one per user) and `cart_items` (one row per product + size), signed-in users only, with no price column. Deleting a product sets `cart_items.product_id` to null and keeps the row (with `product_name`) so the cart shows "No longer available" until the user removes it. Don't add guest carts, orders, payments, discounts, reviews, wishlists or product variants unless asked.
 - **Stock** is one integer column, `products.stock` (0 = sold out), not a separate table. `products.sizes` is display-only jsonb `{label, available}[]` (null = one size); it has no per-size quantities.
 - **Money** is integer cents. `price` and `stock` have `>= 0` check constraints.
 - **Keys:** primary keys are integer identity columns. Public identifiers are `slug` (unique, used in URLs) and `sku` (unique). Every product has exactly one category (`category_id` FK, `on delete restrict`).

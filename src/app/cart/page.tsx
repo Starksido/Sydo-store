@@ -10,6 +10,7 @@ import { requireSession } from "@/lib/session";
 export const metadata: Metadata = { title: "Shopping bag" };
 
 function lineNotice(line: CartLine) {
+  if (!line.product) return "No longer available.";
   if (line.available === 0) return "Sold out.";
   if (line.available < line.quantity) return `Only ${line.available} available. Quantity updated.`;
   return null;
@@ -46,18 +47,27 @@ export default async function CartPage() {
         <ul className="divide-y border-y lg:col-span-8">
           {lines.map((line) => {
             const notice = lineNotice(line);
-            const href = `/products/${line.product.slug}`;
+            const { product } = line;
+            const href = product && `/products/${product.slug}`;
             return (
               <li key={line.id} className="flex gap-4 py-6 md:gap-6">
-                <Link href={href} className="media-frame w-24 shrink-0 md:w-32" tabIndex={-1}>
-                  <Image src={line.product.image} alt="" fill sizes="8rem" />
-                </Link>
+                {product && href ? (
+                  <Link href={href} className="media-frame w-24 shrink-0 md:w-32" tabIndex={-1}>
+                    <Image src={product.image} alt="" fill sizes="8rem" />
+                  </Link>
+                ) : (
+                  <div aria-hidden="true" className="media-frame w-24 shrink-0 md:w-32" />
+                )}
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap justify-between gap-x-6 gap-y-1">
                     <h2 className="text-sm">
-                      <Link href={href} className="link-quiet">
-                        {line.product.name}
-                      </Link>
+                      {href ? (
+                        <Link href={href} className="link-quiet">
+                          {line.name}
+                        </Link>
+                      ) : (
+                        <span className="text-muted">{line.name}</span>
+                      )}
                     </h2>
                     <p className="text-sm">
                       {line.available > 0 ? formatPrice(line.lineTotal) : <span className="text-muted">—</span>}
@@ -68,15 +78,17 @@ export default async function CartPage() {
                       <dt>Size</dt>
                       <dd>{line.size ?? "One size"}</dd>
                     </div>
-                    <div className="flex gap-2">
-                      <dt>Price</dt>
-                      <dd>{formatPrice(line.product.price)}</dd>
-                    </div>
+                    {product && (
+                      <div className="flex gap-2">
+                        <dt>Price</dt>
+                        <dd>{formatPrice(product.price)}</dd>
+                      </div>
+                    )}
                   </dl>
                   {notice && <p className="mt-2 text-sm text-error">{notice}</p>}
                   <CartLineControls
                     lineId={line.id}
-                    name={line.product.name}
+                    name={line.name}
                     quantity={line.available}
                     maxQuantity={line.maxQuantity}
                   />

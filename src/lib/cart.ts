@@ -9,12 +9,15 @@ import { cartItems, carts, products, type ProductSize } from "@/db/schema";
 
 export type CartLine = {
   id: number;
-  product: { id: number; slug: string; name: string; image: string; price: number; stock: number };
+  /** Null when the product has been deleted; the line is then shown as removed. */
+  product: { id: number; slug: string; name: string; image: string; price: number; stock: number } | null;
+  /** Current product name, or the name saved when added if the product was deleted. */
+  name: string;
   /** Null for one-size items. */
   size: string | null;
   /** Quantity saved in the cart. */
   quantity: number;
-  /** Quantity that can still be fulfilled from current stock: `quantity` or less, 0 when sold out. */
+  /** Quantity that can still be fulfilled from current stock: `quantity` or less, 0 when sold out or removed. */
   available: number;
   /** Highest quantity this line can be set to, given the product's other lines. */
   maxQuantity: number;
@@ -39,7 +42,8 @@ export async function getCart(userId: string): Promise<Cart> {
       id: cartItems.id,
       size: cartItems.size,
       quantity: cartItems.quantity,
-      available: sql<number>`least(${cartItems.quantity}, greatest(${products.stock} - ${heldBefore}, 0))::int`.mapWith(
+      savedName: cartItems.productName,
+      available: sql<number>`least(${cartItems.quantity}, greatest(coalesce(${products.stock}, 0) - ${heldBefore}, 0))::int`.mapWith(
         Number,
       ),
       product: {
@@ -53,19 +57,25 @@ export async function getCart(userId: string): Promise<Cart> {
     })
     .from(cartItems)
     .innerJoin(carts, eq(cartItems.cartId, carts.id))
-    .innerJoin(products, eq(cartItems.productId, products.id))
+    // Left join: rows for deleted products stay in the cart with a null product.
+    .leftJoin(products, eq(cartItems.productId, products.id))
     .where(eq(carts.userId, userId))
     .orderBy(asc(cartItems.id));
 
   const heldByProduct = new Map<number, number>();
   for (const row of rows) {
+    if (!row.product) continue;
     heldByProduct.set(row.product.id, (heldByProduct.get(row.product.id) ?? 0) + row.quantity);
   }
 
-  const lines = rows.map((row) => {
+  const lines = rows.map(({ savedName, ...row }) => {
+    if (!row.product) {
+      return { ...row, name: savedName, available: 0, maxQuantity: 0, lineTotal: 0 };
+    }
     const heldByOthers = heldByProduct.get(row.product.id)! - row.quantity;
     return {
       ...row,
+      name: row.product.name,
       maxQuantity: Math.max(row.available, row.product.stock - heldByOthers),
       lineTotal: row.available * row.product.price,
     };
@@ -103,15 +113,15 @@ async function getOrCreateCartId(userId: string) {
 export async function addCartItem(userId: string, productId: number, size: string | null, quantity: number) {
   const cartId = await getOrCreateCartId(userId);
   const { rows } = await db.execute(sql`
-    insert into cart_items (cart_id, product_id, size, quantity)
-    select ${cartId}::int, p.id, ${size}::text, ${quantity}::int
+    insert into cart_items (cart_id, product_id, product_name, size, quantity)
+    select ${cartId}::int, p.id, p.name, ${size}::text, ${quantity}::int
     from products p
     where p.id = ${productId}::int
       and ${quantity}::int + (
         select coalesce(sum(ci.quantity), 0) from cart_items ci
         where ci.cart_id = ${cartId}::int and ci.product_id = p.id
       ) <= p.stock
-    on conflict on constraint cart_items_cart_product_size_unique
+    on conflict (cart_id, product_id, (coalesce(size, ''))) where product_id is not null
     do update set quantity = cart_items.quantity + excluded.quantity, updated_at = now()
     returning id
   `);
