@@ -13,7 +13,7 @@ export type Product = {
   sku: string;
   name: string;
   category: { slug: string; name: string };
-  /** Price in cents (USD). */
+  /** Price in KES cents (whole shillings). */
   price: number;
   /** Units in stock across all sizes. 0 means sold out. */
   stock: number;

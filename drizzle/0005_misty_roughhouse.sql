@@ -1,0 +1,1 @@
+ALTER TABLE "products" ADD CONSTRAINT "products_price_whole_shillings" CHECK ("products"."price" % 100 = 0);

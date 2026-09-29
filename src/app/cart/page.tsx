@@ -11,7 +11,10 @@ export const metadata: Metadata = { title: "Shopping bag" };
 
 function lineNotice(line: CartLine, adjusted: boolean) {
   if (!line.product) return "No longer available.";
-  if (line.available === 0) return "Sold out.";
+  if (line.available === 0) {
+    // Stock left but none for this line: the product's other sizes in the bag hold all of it.
+    return line.product.stock > 0 ? "Already in your bag in another size." : "Sold out.";
+  }
   if (adjusted) return `Only ${line.available} available. Quantity updated.`;
   // Stock changed between the update and the read; the next visit updates the quantity.
   if (line.available < line.quantity) return `Only ${line.available} available.`;
@@ -116,12 +119,18 @@ export default async function CartPage() {
                 <dd>Complimentary</dd>
               </div>
             </dl>
-            <p className="mt-6 border-t border-line-strong pt-6 text-sm text-muted">
-              Online checkout is coming soon.
-            </p>
-            <Link href="/collections/new-in" className="btn btn-secondary mt-6 w-full">
-              Continue shopping
-            </Link>
+            <div className="mt-6 border-t border-line-strong pt-6">
+              {count > 0 ? (
+                <Link href="/checkout" className="btn btn-primary w-full">
+                  Checkout
+                </Link>
+              ) : (
+                <p className="text-sm text-muted">Nothing in your bag is available to order right now.</p>
+              )}
+              <Link href="/collections/new-in" className="btn btn-secondary mt-3 w-full">
+                Continue shopping
+              </Link>
+            </div>
           </div>
         </aside>
       </div>

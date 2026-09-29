@@ -3,6 +3,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { nextCookies } from "better-auth/next-js";
 
 import { db } from "@/db";
+import { authLogger } from "@/lib/auth-logger";
 
 const MIN_SECRET_BYTES = 32;
 const GENERATE_HINT = "Generate one with `npx auth secret` or `openssl rand -base64 32`.";
@@ -46,6 +47,8 @@ export const auth = betterAuth({
   secret: readAuthSecret(),
   database: drizzleAdapter(db, { provider: "pg" }),
   emailAndPassword: { enabled: true },
+  // Logs the cause of failed database queries, not just "Failed query".
+  logger: authLogger,
   // Lets `auth.api.*` calls from Server Actions set cookies. Must stay the last plugin.
   plugins: [nextCookies()],
 });

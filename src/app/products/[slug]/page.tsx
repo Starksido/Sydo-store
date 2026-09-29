@@ -95,10 +95,7 @@ export default async function ProductPage({ params }: PageProps<"/products/[slug
                   </p>
                 </Disclosure>
                 <Disclosure title="Gifting">
-                  <p>
-                    Every order arrives in signature packaging. Add a personal message at
-                    checkout.
-                  </p>
+                  <p>Every order arrives in signature packaging.</p>
                 </Disclosure>
               </div>
             </div>

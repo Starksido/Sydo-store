@@ -215,3 +215,13 @@ describe("products_stock_nonnegative", () => {
     expect(await getStock(a)).toBe(1);
   });
 });
+
+describe("products_price_whole_shillings", () => {
+  it("rejects prices that aren't whole shillings", async () => {
+    const a = await createProduct(1, 100_000);
+
+    const error = await db.execute(sql`update products set price = 100050 where id = ${a}`).catch((e: unknown) => e);
+
+    expect(sqlState(error)).toBe("23514");
+  });
+});

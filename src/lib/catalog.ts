@@ -18,12 +18,14 @@ export function unsplash(id: string, width = 1600, focus?: Focus) {
   return `${url}&h=${height}&crop=focalpoint&fp-x=${focus.x}&fp-y=${focus.y}&fp-z=${focus.zoom}`;
 }
 
-const currency = new Intl.NumberFormat("en-US", {
+const currency = new Intl.NumberFormat("en-KE", {
   style: "currency",
-  currency: "USD",
+  currency: "KES",
+  currencyDisplay: "code",
   maximumFractionDigits: 0,
 });
 
+/** KES cents as e.g. "KES 375,700". */
 export function formatPrice(cents: number) {
   return currency.format(cents / 100);
 }

@@ -46,6 +46,21 @@ describe("reconcileCart", () => {
     expect(count).toBe(0);
   });
 
+  it("gives a size nothing when the product's other sizes in the bag hold all its stock", async () => {
+    const userId = await createUser();
+    const a = await createProduct(5);
+    const m = await createCartLine(userId, a, 2, "M");
+    const l = await createCartLine(userId, a, 1, "L");
+    await setStock(a, 2);
+
+    expect(await reconcileCart(userId)).toEqual(new Set());
+    expect(await getCartQuantities(userId)).toEqual({ [m]: 2, [l]: 1 });
+
+    // The bag shows "Already in your bag in another size" for this: nothing available, stock left.
+    const { lines } = await getCart(userId);
+    expect(lines[1]).toMatchObject({ id: l, available: 0, product: { stock: 2 } });
+  });
+
   it("leaves lines that stock still covers, and other users' carts, alone", async () => {
     const userId = await createUser();
     const otherId = await createUser();
