@@ -4,20 +4,23 @@ import Link from "next/link";
 
 import { CartLineControls } from "@/components/cart/cart-line-controls";
 import { formatPrice } from "@/lib/catalog";
-import { getCart, type CartLine } from "@/lib/cart";
+import { getCart, reconcileCart, type CartLine } from "@/lib/cart";
 import { requireSession } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Shopping bag" };
 
-function lineNotice(line: CartLine) {
+function lineNotice(line: CartLine, adjusted: boolean) {
   if (!line.product) return "No longer available.";
   if (line.available === 0) return "Sold out.";
-  if (line.available < line.quantity) return `Only ${line.available} available. Quantity updated.`;
+  if (adjusted) return `Only ${line.available} available. Quantity updated.`;
+  // Stock changed between the update and the read; the next visit updates the quantity.
+  if (line.available < line.quantity) return `Only ${line.available} available.`;
   return null;
 }
 
 export default async function CartPage() {
   const { user } = await requireSession("/cart");
+  const adjusted = await reconcileCart(user.id);
   const { lines, count, subtotal } = await getCart(user.id);
 
   if (lines.length === 0) {
@@ -46,7 +49,7 @@ export default async function CartPage() {
       <div className="mt-8 grid gap-y-10 md:mt-12 lg:grid-cols-12 lg:gap-x-10 xl:gap-x-16">
         <ul className="divide-y border-y lg:col-span-8">
           {lines.map((line) => {
-            const notice = lineNotice(line);
+            const notice = lineNotice(line, adjusted.has(line.id));
             const { product } = line;
             const href = product && `/products/${product.slug}`;
             return (

@@ -88,6 +88,38 @@ export async function getCart(userId: string): Promise<Cart> {
   };
 }
 
+/**
+ * Lowers saved quantities that stock can no longer cover to what's available, sharing stock across
+ * sizes in line order like `getCart`. Lines with nothing available keep their quantity and show as
+ * sold out (quantities can't be 0). Only ever lowers. Returns the ids of the lines it changed.
+ * Locks the cart's rows in id order first, like checkout does, so the two can't deadlock.
+ */
+export async function reconcileCart(userId: string): Promise<Set<number>> {
+  const { rows } = await db.execute<{ id: number }>(sql`
+    with locked as (
+      select ci.id
+      from cart_items ci
+      join carts c on c.id = ci.cart_id
+      where c.user_id = ${userId}
+      order by ci.id
+      for update of ci
+    ),
+    fit as (
+      select ${cartItems.id} as id,
+        least(${cartItems.quantity}, greatest(coalesce(${products.stock}, 0) - ${heldBefore}, 0))::int as available
+      from ${cartItems}
+      join locked on locked.id = ${cartItems.id}
+      join ${products} on ${products.id} = ${cartItems.productId}
+    )
+    update cart_items ci
+    set quantity = fit.available, updated_at = now()
+    from fit
+    where ci.id = fit.id and fit.available > 0 and fit.available < ci.quantity
+    returning ci.id
+  `);
+  return new Set(rows.map((row) => row.id));
+}
+
 /** The fields needed to validate an add; stock here is only for messages, not the check. */
 export async function getCartProduct(productId: number) {
   const [row] = await db
