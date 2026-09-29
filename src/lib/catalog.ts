@@ -30,6 +30,25 @@ export function formatPrice(cents: number) {
   return currency.format(cents / 100);
 }
 
+const ORDER_STATUS_LABELS = {
+  pending_payment: "Awaiting payment",
+  paid: "Paid",
+  processing: "Processing",
+  shipped: "Shipped",
+  delivered: "Delivered",
+  cancelled: "Cancelled",
+} as const;
+
+export function orderStatusLabel(status: keyof typeof ORDER_STATUS_LABELS) {
+  return ORDER_STATUS_LABELS[status];
+}
+
+const orderDate = new Intl.DateTimeFormat("en-KE", { dateStyle: "long", timeStyle: "short", timeZone: "Africa/Nairobi" });
+
+export function formatOrderDate(date: Date) {
+  return orderDate.format(date);
+}
+
 export const LOW_STOCK_THRESHOLD = 3;
 
 export type StockState = "in-stock" | "low-stock" | "sold-out";

@@ -5,7 +5,7 @@
 // the order and its items from the locked product rows, and deletes those cart lines, all or none.
 import { randomBytes } from "node:crypto";
 
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { orderItems, orders } from "@/db/schema";
@@ -187,5 +187,21 @@ export async function getOrderForUser(userId: string, reference: string) {
     with: { items: { orderBy: asc(orderItems.id) } },
   });
 }
+
+export const ORDERS_PAGE_SIZE = 10;
+
+/** One page of the user's orders, newest first. `hasMore` is true when an older page exists. */
+export async function listOrdersForUser(userId: string, { page = 1, pageSize = ORDERS_PAGE_SIZE } = {}) {
+  const rows = await db
+    .select({ reference: orders.reference, status: orders.status, total: orders.total, createdAt: orders.createdAt })
+    .from(orders)
+    .where(eq(orders.userId, userId))
+    .orderBy(desc(orders.createdAt), desc(orders.id))
+    .limit(pageSize + 1)
+    .offset((page - 1) * pageSize);
+  return { orders: rows.slice(0, pageSize), hasMore: rows.length > pageSize };
+}
+
+export type OrderListItem = Awaited<ReturnType<typeof listOrdersForUser>>["orders"][number];
 
 export type Order = NonNullable<Awaited<ReturnType<typeof getOrderForUser>>>;

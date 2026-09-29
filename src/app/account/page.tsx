@@ -1,12 +1,24 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { SignOutButton } from "@/components/auth/sign-out-button";
+import { formatOrderDate, formatPrice, orderStatusLabel } from "@/lib/catalog";
+import { listOrdersForUser } from "@/lib/orders";
 import { requireSession } from "@/lib/session";
 
 export const metadata: Metadata = { title: "My account" };
 
-export default async function AccountPage() {
+const MAX_PAGE = 1000;
+
+function parsePage(value: string | string[] | undefined) {
+  const page = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : 1;
+  return Math.min(Math.max(page, 1), MAX_PAGE);
+}
+
+export default async function AccountPage({ searchParams }: PageProps<"/account">) {
   const { user } = await requireSession("/account");
+  const page = parsePage((await searchParams).page);
+  const { orders, hasMore } = await listOrdersForUser(user.id, { page });
 
   return (
     <section aria-labelledby="account-heading" className="container-prose section">
@@ -23,6 +35,55 @@ export default async function AccountPage() {
           <dd className="break-all">{user.email}</dd>
         </div>
       </dl>
+
+      <div className="mt-16" aria-labelledby="orders-heading" role="region">
+        <h2 id="orders-heading" className="heading-2">
+          Order history
+        </h2>
+        {orders.length === 0 ? (
+          <div className="mt-6 border-y py-10">
+            <p className="text-muted">
+              {page > 1 ? "There are no orders on this page." : "You haven't placed any orders yet."}
+            </p>
+            <Link href={page > 1 ? "/account" : "/collections/new-in"} className="btn btn-secondary mt-6">
+              {page > 1 ? "Back to latest orders" : "Start shopping"}
+            </Link>
+          </div>
+        ) : (
+          <ul className="mt-6 divide-y border-y">
+            {orders.map((order) => (
+              <li key={order.reference}>
+                <Link
+                  href={`/account/orders/${order.reference}`}
+                  className="grid gap-x-6 gap-y-1 py-4 md:grid-cols-[1fr_1.5fr_1fr_auto] md:items-baseline"
+                >
+                  <span>{order.reference}</span>
+                  <span className="text-sm text-muted">{formatOrderDate(order.createdAt)}</span>
+                  <span className="text-sm">{orderStatusLabel(order.status)}</span>
+                  <span className="md:text-right">{formatPrice(order.total)}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+        {(page > 1 || hasMore) && orders.length > 0 && (
+          <nav aria-label="Order history pages" className="mt-6 flex justify-between gap-4">
+            {page > 1 ? (
+              <Link href={page === 2 ? "/account" : `/account?page=${page - 1}`} className="btn btn-secondary">
+                Newer orders
+              </Link>
+            ) : (
+              <span />
+            )}
+            {hasMore && (
+              <Link href={`/account?page=${page + 1}`} className="btn btn-secondary">
+                Older orders
+              </Link>
+            )}
+          </nav>
+        )}
+      </div>
+
       <div className="mt-10">
         <SignOutButton />
       </div>

@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/db";
 import { products, user } from "@/db/schema";
 import type { Delivery } from "@/lib/delivery";
-import { getOrderForUser, placeOrder, type CheckoutLine } from "@/lib/orders";
+import { getOrderForUser, listOrdersForUser, placeOrder, type CheckoutLine } from "@/lib/orders";
 
 import {
   createCartLine,
@@ -281,6 +281,46 @@ describe("getOrderForUser", () => {
     expect(await getOrderForUser(ownerId, reference)).toMatchObject({ reference, userId: ownerId });
     expect(await getOrderForUser(otherId, reference)).toBeUndefined();
     expect(await getOrderForUser(ownerId, "SY-NOTREAL2")).toBeUndefined();
+  });
+});
+
+describe("listOrdersForUser", () => {
+  async function placeOne(userId: string) {
+    const product = await createProduct(5);
+    const line = await createCartLine(userId, product, 1);
+    return referenceOf(await order(userId, [{ lineId: line, quantity: 1 }]));
+  }
+
+  it("lists only the user's own orders, newest first", async () => {
+    const userId = await createUser();
+    const otherId = await createUser();
+    const first = await placeOne(userId);
+    const second = await placeOne(userId);
+    await placeOne(otherId);
+
+    const { orders, hasMore } = await listOrdersForUser(userId);
+    expect(orders.map((o) => o.reference)).toEqual([second, first]);
+    expect(hasMore).toBe(false);
+  });
+
+  it("pages through orders without loading them all", async () => {
+    const userId = await createUser();
+    const references = [];
+    for (let i = 0; i < 3; i++) references.push(await placeOne(userId));
+    references.reverse();
+
+    const page1 = await listOrdersForUser(userId, { page: 1, pageSize: 2 });
+    expect(page1.orders.map((o) => o.reference)).toEqual(references.slice(0, 2));
+    expect(page1.hasMore).toBe(true);
+
+    const page2 = await listOrdersForUser(userId, { page: 2, pageSize: 2 });
+    expect(page2.orders.map((o) => o.reference)).toEqual(references.slice(2));
+    expect(page2.hasMore).toBe(false);
+  });
+
+  it("returns nothing for a user without orders", async () => {
+    const userId = await createUser();
+    expect(await listOrdersForUser(userId)).toEqual({ orders: [], hasMore: false });
   });
 });
 
