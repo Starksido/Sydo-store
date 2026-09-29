@@ -10,11 +10,13 @@
     "ask": [
       "Bash(git push *)"
     ],
-    "deny": [
-      "Read(.env)",
-      "Read(.env.*)",
-      "Edit(.env)",
-      "Edit(.env.*)"
-    ]
+   "deny": [
+  "Read(.env)",
+  "Read(.env.local)",
+  "Read(.env.production)",
+  "Edit(.env)",
+  "Edit(.env.local)",
+  "Edit(.env.production)"
+]
   }
 }

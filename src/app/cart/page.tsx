@@ -1,0 +1,115 @@
+import type { Metadata } from "next";
+import Image from "next/image";
+import Link from "next/link";
+
+import { CartLineControls } from "@/components/cart/cart-line-controls";
+import { formatPrice } from "@/lib/catalog";
+import { getCart, type CartLine } from "@/lib/cart";
+import { requireSession } from "@/lib/session";
+
+export const metadata: Metadata = { title: "Shopping bag" };
+
+function lineNotice(line: CartLine) {
+  if (line.available === 0) return "Sold out.";
+  if (line.available < line.quantity) return `Only ${line.available} available. Quantity updated.`;
+  return null;
+}
+
+export default async function CartPage() {
+  const { user } = await requireSession("/cart");
+  const { lines, count, subtotal } = await getCart(user.id);
+
+  if (lines.length === 0) {
+    return (
+      <section aria-labelledby="cart-heading" className="container-prose section text-center">
+        <h1 id="cart-heading" className="heading-1">
+          Shopping bag
+        </h1>
+        <p className="mt-4 text-muted">Your shopping bag is empty.</p>
+        <Link href="/collections/new-in" className="btn btn-secondary mt-8">
+          Continue shopping
+        </Link>
+      </section>
+    );
+  }
+
+  return (
+    <section aria-labelledby="cart-heading" className="container-page section">
+      <h1 id="cart-heading" className="heading-1">
+        Shopping bag
+      </h1>
+      <p className="mt-2 text-sm text-muted">
+        {count} {count === 1 ? "item" : "items"}
+      </p>
+
+      <div className="mt-8 grid gap-y-10 md:mt-12 lg:grid-cols-12 lg:gap-x-10 xl:gap-x-16">
+        <ul className="divide-y border-y lg:col-span-8">
+          {lines.map((line) => {
+            const notice = lineNotice(line);
+            const href = `/products/${line.product.slug}`;
+            return (
+              <li key={line.id} className="flex gap-4 py-6 md:gap-6">
+                <Link href={href} className="media-frame w-24 shrink-0 md:w-32" tabIndex={-1}>
+                  <Image src={line.product.image} alt="" fill sizes="8rem" />
+                </Link>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap justify-between gap-x-6 gap-y-1">
+                    <h2 className="text-sm">
+                      <Link href={href} className="link-quiet">
+                        {line.product.name}
+                      </Link>
+                    </h2>
+                    <p className="text-sm">
+                      {line.available > 0 ? formatPrice(line.lineTotal) : <span className="text-muted">—</span>}
+                    </p>
+                  </div>
+                  <dl className="mt-1 space-y-0.5 text-sm text-muted">
+                    <div className="flex gap-2">
+                      <dt>Size</dt>
+                      <dd>{line.size ?? "One size"}</dd>
+                    </div>
+                    <div className="flex gap-2">
+                      <dt>Price</dt>
+                      <dd>{formatPrice(line.product.price)}</dd>
+                    </div>
+                  </dl>
+                  {notice && <p className="mt-2 text-sm text-error">{notice}</p>}
+                  <CartLineControls
+                    lineId={line.id}
+                    name={line.product.name}
+                    quantity={line.available}
+                    maxQuantity={line.maxQuantity}
+                  />
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+
+        <aside aria-labelledby="summary-heading" className="lg:col-span-4">
+          <div className="bg-surface p-6 lg:sticky lg:top-[calc(var(--header-h)+2.5rem)]">
+            <h2 id="summary-heading" className="label">
+              Order summary
+            </h2>
+            <dl className="mt-6 space-y-3 text-sm">
+              <div className="flex justify-between gap-6">
+                <dt>Subtotal</dt>
+                <dd>{formatPrice(subtotal)}</dd>
+              </div>
+              <div className="flex justify-between gap-6">
+                <dt>Shipping</dt>
+                <dd>Complimentary</dd>
+              </div>
+            </dl>
+            <p className="mt-6 border-t border-line-strong pt-6 text-sm text-muted">
+              Online checkout is coming soon.
+            </p>
+            <Link href="/collections/new-in" className="btn btn-secondary mt-6 w-full">
+              Continue shopping
+            </Link>
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}

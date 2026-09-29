@@ -76,7 +76,7 @@ export default async function ProductPage({ params }: PageProps<"/products/[slug
                 <p className="text-xs text-muted">Style {product.sku}</p>
               </div>
 
-              <ProductPurchase stock={product.stock} sizes={product.sizes} />
+              <ProductPurchase productId={product.id} stock={product.stock} sizes={product.sizes} />
 
               <p className="mt-10 text-muted">{product.description}</p>
 

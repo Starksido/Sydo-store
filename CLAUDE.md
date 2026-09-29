@@ -32,12 +32,12 @@ No test framework is set up yet.
 
 ## Database conventions
 
-- **Scope:** the catalog is only `categories` and `products`. Don't add carts, orders, payments, reviews, wishlists or product variants unless asked.
+- **Scope:** the catalog is only `categories` and `products`; carts are `carts` (one per user) and `cart_items` (one row per product + size), signed-in users only, with no price column. Don't add guest carts, orders, payments, discounts, reviews, wishlists or product variants unless asked.
 - **Stock** is one integer column, `products.stock` (0 = sold out), not a separate table. `products.sizes` is display-only jsonb `{label, available}[]` (null = one size); it has no per-size quantities.
 - **Money** is integer cents. `price` and `stock` have `>= 0` check constraints.
 - **Keys:** primary keys are integer identity columns. Public identifiers are `slug` (unique, used in URLs) and `sku` (unique). Every product has exactly one category (`category_id` FK, `on delete restrict`).
 - **Derived listings aren't categories.** "New In" / New Arrivals is ordered by `products.created_at`, not a category row.
-- **Data access** goes through `src/lib/products.ts` only. Pages and components don't import `@/db` directly, and client components use `import type` from it so the DB client isn't bundled. `src/lib/catalog.ts` holds static editorial content and display helpers only; product data doesn't go there.
+- **Data access** goes through `src/lib/products.ts` and `src/lib/cart.ts` only. Cart writes enforce stock (shared across a product's sizes) in the same SQL statement as the write; cart mutations are the Server Functions in `src/app/cart/actions.ts`. Pages and components don't import `@/db` directly, and client components use `import type` from it so the DB client isn't bundled. `src/lib/catalog.ts` holds static editorial content and display helpers only; product data doesn't go there.
 - **Migrations:** edit `src/db/schema.ts`, run `npm run db:generate`, review the SQL in `drizzle/`, then run `npm run db:migrate`. Commit the `drizzle/` folder. Don't use `db:push` on shared or production databases.
 - **Seed:** `src/db/seed.ts` must stay idempotent (upsert on `slug`). Update it whenever a schema change adds a required column.
 - **Driver limits:** `neon-http` has no interactive transactions. Use `db.batch([...])` or idempotent sequential writes.

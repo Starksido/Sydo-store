@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { nextCookies } from "better-auth/next-js";
 
 import { db } from "@/db";
 
@@ -44,4 +45,9 @@ function readAuthSecret() {
 export const auth = betterAuth({
   secret: readAuthSecret(),
   database: drizzleAdapter(db, { provider: "pg" }),
+  emailAndPassword: { enabled: true },
+  // Lets `auth.api.*` calls from Server Actions set cookies. Must stay the last plugin.
+  plugins: [nextCookies()],
 });
+
+export type Session = typeof auth.$Infer.Session;

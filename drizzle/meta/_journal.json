@@ -8,6 +8,20 @@
       "when": 1790623919675,
       "tag": "0000_married_stardust",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790664398439,
+      "tag": "0001_melodic_blizzard",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790666747530,
+      "tag": "0002_material_nocturne",
+      "breakpoints": true
     }
   ]
 }

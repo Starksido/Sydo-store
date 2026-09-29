@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
+import { useCartCount } from "@/components/cart/cart-count-provider";
 import { AccountIcon, BagIcon, CloseIcon, MenuIcon, SearchIcon } from "@/components/icons";
 import { primaryNav } from "@/lib/catalog";
 
@@ -16,6 +17,7 @@ const iconButton = "inline-flex size-10 items-center justify-center transition-o
 
 export function SiteHeader() {
   const [open, setOpen] = useState(false);
+  const { count } = useCartCount();
   const closeRef = useRef<HTMLButtonElement>(null);
   const openRef = useRef<HTMLButtonElement>(null);
 
@@ -100,8 +102,20 @@ export function SiteHeader() {
             >
               <AccountIcon />
             </Link>
-            <Link href="/cart" aria-label="Shopping bag, 0 items" className={iconButton}>
+            <Link
+              href="/cart"
+              aria-label={`Shopping bag, ${count} ${count === 1 ? "item" : "items"}`}
+              className={`${iconButton} relative`}
+            >
               <BagIcon />
+              {count > 0 && (
+                <span
+                  aria-hidden="true"
+                  className="absolute top-1 right-0.5 flex h-4 min-w-4 items-center justify-center bg-ink px-1 text-2xs leading-none text-paper tabular-nums"
+                >
+                  {count > 99 ? "99+" : count}
+                </span>
+              )}
             </Link>
           </div>
         </div>

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 
+import { CartCountProvider } from "@/components/cart/cart-count-provider";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import "./globals.css";
@@ -23,8 +24,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${geistSans.variable} h-full`}>
       <body className="flex min-h-full flex-col">
-        <SiteHeader />
-        <main className="flex-1">{children}</main>
+        <CartCountProvider>
+          <SiteHeader />
+          <main className="flex-1">{children}</main>
+        </CartCountProvider>
         <SiteFooter />
       </body>
     </html>
