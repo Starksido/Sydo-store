@@ -17,7 +17,7 @@ Next.js 16 (App Router, Turbopack, `src/` dir, `@/*` → `src/*`), React 19, Typ
 - `npm run db:seed` — loads the sample catalog (`src/db/seed.ts`, via `tsx`)
 - `npx auth generate` — Better Auth CLI (the package's bin is `auth`, not `@better-auth/cli`); writes Drizzle table definitions for auth into the schema. `npx auth secret` generates `BETTER_AUTH_SECRET`.
 
-No test framework is set up yet.
+- `npm run test` — Vitest (`vitest.config.mts`, node environment). Tests hit a real Postgres and run **only** against `TEST_DATABASE_URL` from `.env.test.local`: an empty Neon database whose name ends in `_test`. `tests/test-env.ts` refuses anything else and never reads `DATABASE_URL`/`.env.local`; global setup applies the committed `drizzle/` migrations to it. Never point tests at the store database or a branch of it.
 
 ## Architecture
 
@@ -37,7 +37,7 @@ No test framework is set up yet.
 - **Money** is integer cents. `price` and `stock` have `>= 0` check constraints.
 - **Keys:** primary keys are integer identity columns. Public identifiers are `slug` (unique, used in URLs) and `sku` (unique). Every product has exactly one category (`category_id` FK, `on delete restrict`).
 - **Derived listings aren't categories.** "New In" / New Arrivals is ordered by `products.created_at`, not a category row.
-- **Data access** goes through `src/lib/products.ts` and `src/lib/cart.ts` only. Cart writes enforce stock (shared across a product's sizes) in the same SQL statement as the write; cart mutations are the Server Functions in `src/app/cart/actions.ts`. Pages and components don't import `@/db` directly, and client components use `import type` from it so the DB client isn't bundled. `src/lib/catalog.ts` holds static editorial content and display helpers only; product data doesn't go there.
+- **Data access** goes through `src/lib/products.ts`, `src/lib/cart.ts` and `src/lib/stock.ts` only. Stock is only decremented through `decrementStock` (`src/lib/stock.ts`): one statement that locks the products in id order and updates all or none. It's deliberately not a `"use server"` export, so callers must check the session first. Cart writes enforce stock (shared across a product's sizes) in the same SQL statement as the write; cart mutations are the Server Functions in `src/app/cart/actions.ts`. Pages and components don't import `@/db` directly, and client components use `import type` from it so the DB client isn't bundled. `src/lib/catalog.ts` holds static editorial content and display helpers only; product data doesn't go there.
 - **Migrations:** edit `src/db/schema.ts`, run `npm run db:generate`, review the SQL in `drizzle/`, then run `npm run db:migrate`. Commit the `drizzle/` folder. Don't use `db:push` on shared or production databases.
 - **Seed:** `src/db/seed.ts` must stay idempotent (upsert on `slug`). Update it whenever a schema change adds a required column.
 - **Driver limits:** `neon-http` has no interactive transactions. Use `db.batch([...])` or idempotent sequential writes.
