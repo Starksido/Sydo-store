@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState, useTransition } from "react";
 
-import { addToCart } from "@/app/cart/actions";
+import { addToCart } from "@/app/(store)/cart/actions";
 import { useCartCount } from "@/components/cart/cart-count-provider";
 import { stockState } from "@/lib/catalog";
 import type { ProductSize } from "@/lib/products";

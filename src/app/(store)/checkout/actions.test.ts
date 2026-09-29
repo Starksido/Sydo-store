@@ -3,13 +3,13 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { placeOrderAction } from "@/app/checkout/actions";
+import { placeOrderAction } from "@/app/(store)/checkout/actions";
 import { listOrdersForUser } from "@/lib/orders";
 import { requireSession } from "@/lib/session";
 
-import { createCartLine, createProduct, createUser, getStock, resetCatalog } from "../../../tests/fixtures";
-import { getPayments } from "../../../tests/orders";
-import { mockPaystack } from "../../../tests/paystack-mock";
+import { createCartLine, createProduct, createUser, getStock, resetCatalog } from "../../../../tests/fixtures";
+import { getPayments } from "../../../../tests/orders";
+import { mockPaystack } from "../../../../tests/paystack-mock";
 
 vi.mock("@/lib/session", () => ({ requireSession: vi.fn() }));
 vi.mock("next/server", () => ({ after: vi.fn() }));

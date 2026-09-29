@@ -1,12 +1,12 @@
 // Runs against the test database only (see tests/test-env.ts). Paystack and the session are mocked.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { payOrderAction } from "@/app/orders/actions";
+import { payOrderAction } from "@/app/(store)/orders/actions";
 import { requireSession } from "@/lib/session";
 
-import { createProduct, createUser, resetCatalog } from "../../../tests/fixtures";
-import { createOrder, setOrderStatus } from "../../../tests/orders";
-import { mockPaystack } from "../../../tests/paystack-mock";
+import { createProduct, createUser, resetCatalog } from "../../../../tests/fixtures";
+import { createOrder, setOrderStatus } from "../../../../tests/orders";
+import { mockPaystack } from "../../../../tests/paystack-mock";
 
 vi.mock("@/lib/session", () => ({ requireSession: vi.fn() }));
 vi.mock("next/navigation", () => ({

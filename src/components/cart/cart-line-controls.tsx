@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 
-import { removeFromCart, updateCartItem } from "@/app/cart/actions";
+import { removeFromCart, updateCartItem } from "@/app/(store)/cart/actions";
 import { useCartCount } from "@/components/cart/cart-count-provider";
 
 const MAX_OPTIONS = 10;

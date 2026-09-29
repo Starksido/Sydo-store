@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState } from "react";
 
-import { placeOrderAction, type PlaceOrderState } from "@/app/checkout/actions";
+import { placeOrderAction, type PlaceOrderState } from "@/app/(store)/checkout/actions";
 import { useCartCount } from "@/components/cart/cart-count-provider";
 import { COUNTIES, type DeliveryField } from "@/lib/delivery";
 import type { CheckoutLine } from "@/lib/orders";

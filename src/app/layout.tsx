@@ -1,9 +1,6 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 
-import { CartCountProvider } from "@/components/cart/cart-count-provider";
-import { SiteFooter } from "@/components/site-footer";
-import { SiteHeader } from "@/components/site-header";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -20,16 +17,12 @@ export const metadata: Metadata = {
     "Discover Sydo's collections of ready-to-wear, shoes, bags and accessories for women and men.",
 };
 
+// The storefront's header and footer are in `(store)/layout.tsx`, so other areas (the admin) can
+// have their own.
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${geistSans.variable} h-full`}>
-      <body className="flex min-h-full flex-col">
-        <CartCountProvider>
-          <SiteHeader />
-          <main className="flex-1">{children}</main>
-        </CartCountProvider>
-        <SiteFooter />
-      </body>
+      <body className="flex min-h-full flex-col">{children}</body>
     </html>
   );
 }

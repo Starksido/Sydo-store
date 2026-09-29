@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 
-import { payOrderAction, type PayOrderState } from "@/app/orders/actions";
+import { payOrderAction, type PayOrderState } from "@/app/(store)/orders/actions";
 
 /** Starts a Paystack payment for a pending order; the action redirects to Paystack's checkout. */
 export function PayButton({ reference, label }: { reference: string; label: string }) {
