@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { SignOutButton } from "@/components/auth/sign-out-button";
-import { formatOrderDate, formatPrice, orderStatusLabel } from "@/lib/catalog";
+import { orderStatusText } from "@/components/orders/order-status";
+import { formatOrderDate, formatPrice } from "@/lib/catalog";
 import { listOrdersForUser } from "@/lib/orders";
 import { requireSession } from "@/lib/session";
 
@@ -59,7 +60,7 @@ export default async function AccountPage({ searchParams }: PageProps<"/account"
                 >
                   <span>{order.reference}</span>
                   <span className="text-sm text-muted">{formatOrderDate(order.createdAt)}</span>
-                  <span className="text-sm">{orderStatusLabel(order.status)}</span>
+                  <span className="text-sm">{orderStatusText(order)}</span>
                   <span className="md:text-right">{formatPrice(order.total)}</span>
                 </Link>
               </li>

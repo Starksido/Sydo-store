@@ -1,8 +1,12 @@
 "use server";
 
+import { redirect } from "next/navigation";
+import { after } from "next/server";
+
 import { getCart } from "@/lib/cart";
 import { parseDelivery, type DeliveryField } from "@/lib/delivery";
 import { placeOrder, type CheckoutLine } from "@/lib/orders";
+import { expireUnpaidOrders, startPayment, type StartPaymentResult } from "@/lib/payments";
 import { requireSession } from "@/lib/session";
 
 /** What was submitted, so the form can show it again: React resets a form after its action. */
@@ -12,6 +16,7 @@ export type PlaceOrderState =
   | { status: "idle" }
   | { status: "invalid"; values: DeliveryValues; errors: Partial<Record<DeliveryField, string>> }
   | { status: "error"; values: DeliveryValues; message: string; items?: string[] }
+  /** Only returned when payment couldn't be started; otherwise the action redirects to Paystack. */
   | { status: "placed"; reference: string; count: number };
 
 const FIELDS: DeliveryField[] = ["fullName", "phone", "county", "town", "address"];
@@ -37,8 +42,9 @@ function parseLines(value: FormDataEntryValue | null): CheckoutLine[] | null {
 }
 
 /**
- * Places the order for the lines shown at checkout. Prices and totals come from the database;
- * the form only says which cart lines, at which quantities, the customer saw.
+ * Places the order for the lines shown at checkout, then sends the customer to Paystack to pay for
+ * it. Prices and totals come from the database; the form only says which cart lines, at which
+ * quantities, the customer saw. If payment can't be started, the order page offers a retry.
  */
 export async function placeOrderAction(_: PlaceOrderState, formData: FormData): Promise<PlaceOrderState> {
   const { user } = await requireSession("/checkout");
@@ -57,6 +63,19 @@ export async function placeOrderAction(_: PlaceOrderState, formData: FormData): 
 
   const result = await placeOrder(user.id, { checkoutKey, lines, delivery: delivery.delivery });
   if (result.ok) {
+    // Returns the stock of other customers' unpaid orders, between the scheduled sweeps.
+    after(() => expireUnpaidOrders().catch((error) => console.error("[payments] expiry sweep failed", error)));
+
+    // The order exists now, so any failure to start payment sends the customer to the order page,
+    // which offers to pay again, rather than showing an error.
+    let payment: StartPaymentResult;
+    try {
+      payment = await startPayment(user.id, user.email, result.reference);
+    } catch (error) {
+      console.error(`[payments] could not start payment for ${result.reference}`, error);
+      payment = { ok: false, reason: "unavailable" };
+    }
+    if (payment.ok) redirect(payment.authorizationUrl);
     // Lines left out of the order (sold out, removed) stay in the bag.
     const { count } = await getCart(user.id);
     return { status: "placed", reference: result.reference, count };

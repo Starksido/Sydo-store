@@ -37,7 +37,22 @@ const ORDER_STATUS_LABELS = {
   shipped: "Shipped",
   delivered: "Delivered",
   cancelled: "Cancelled",
+  expired: "Expired",
 } as const;
+
+const PAYMENT_CHANNEL_LABELS: Record<string, string> = { mobile_money: "M-Pesa", card: "Card" };
+
+/** Paystack channel as shown to customers, e.g. "M-Pesa". */
+export function paymentChannelLabel(channel: string | null) {
+  return channel ? (PAYMENT_CHANNEL_LABELS[channel] ?? channel.replaceAll("_", " ")) : null;
+}
+
+const paymentTime = new Intl.DateTimeFormat("en-KE", { timeStyle: "short", timeZone: "Africa/Nairobi" });
+
+/** Time of day in Nairobi, e.g. "2:30 pm". */
+export function formatPaymentTime(date: Date) {
+  return paymentTime.format(date);
+}
 
 export function orderStatusLabel(status: keyof typeof ORDER_STATUS_LABELS) {
   return ORDER_STATUS_LABELS[status];

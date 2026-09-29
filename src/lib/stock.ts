@@ -5,7 +5,8 @@
 // every product row (in id order, so concurrent orders can't deadlock), checks all of them against
 // the latest committed stock, and updates all or none. `products_stock_nonnegative` is the backstop.
 // Checkout needs the decrement in the same statement as its own writes, so the steps are also
-// exported as CTEs (`stockDecrementCtes`); `decrementStock` is the standalone form.
+// exported as CTEs (`stockDecrementCtes`); `decrementStock` is the standalone form. Returning the
+// stock of an expired order (`stockIncrementCtes`) locks in the same order.
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/db";
@@ -54,6 +55,31 @@ export function stockDecrementCtes(): SQL {
       set stock = p.stock - r.quantity, updated_at = now()
       from req r, verdict v
       where p.id = r.product_id and v.ok
+      returning p.id
+    )`;
+}
+
+/**
+ * Puts stock back, as the CTEs `restock_locked` and `restock_upd`, to follow a caller-defined
+ * `restock_req(product_id, quantity)` CTE with one row per product. Rows whose product no longer
+ * exists (null or unknown `product_id`) are skipped. Products are locked in id order first, like
+ * the decrement, so this can't deadlock with a concurrent order.
+ */
+export function stockIncrementCtes(): SQL {
+  return sql`
+    restock_locked as (
+      select p.id
+      from products p
+      where p.id in (select product_id from restock_req)
+      order by p.id
+      for update
+    ),
+    -- The aggregate takes every lock, in id order, before the first row is updated.
+    restock_upd as (
+      update products p
+      set stock = p.stock + r.quantity, updated_at = now()
+      from restock_req r
+      where p.id = r.product_id and (select count(*) from restock_locked) > 0
       returning p.id
     )`;
 }

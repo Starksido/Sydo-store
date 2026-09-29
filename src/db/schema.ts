@@ -131,11 +131,14 @@ export const orderStatus = pgEnum("order_status", [
   "shipped",
   "delivered",
   "cancelled",
+  /** Not paid within the payment window; the sweep in `@/lib/payments` returned its stock. */
+  "expired",
 ]);
 
 /**
- * Placed orders. Written only by `placeOrder` in `@/lib/orders`, in the same statement that takes the
- * stock and clears the ordered cart lines. `reference` is the public order number used in URLs;
+ * Placed orders. Created only by `placeOrder` in `@/lib/orders`, in the same statement that takes the
+ * stock and clears the ordered cart lines; marked paid or expired only by `@/lib/payments`.
+ * `reference` is the public order number used in URLs;
  * `checkout_key` comes from the checkout form so a repeated submit returns the same order.
  * Delivery details are copied onto the order.
  */
@@ -158,6 +161,9 @@ export const orders = pgTable(
     deliveryCounty: text("delivery_county").notNull(),
     deliveryTown: text("delivery_town").notNull(),
     deliveryAddress: text("delivery_address").notNull(),
+    /** Paystack reference of the payment that paid this order. Null until paid. */
+    paymentReference: text("payment_reference").unique(),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
@@ -199,6 +205,43 @@ export const orderItems = pgTable(
   ],
 );
 
+export const paymentStatus = pgEnum("payment_status", ["pending", "success", "failed", "abandoned"]);
+
+/**
+ * One row per Paystack payment attempt, written only by `@/lib/payments`. The row is created before
+ * the transaction is initialized, so every reference Paystack can report back is known here.
+ * A `success` row whose reference isn't its order's `payment_reference` is money taken but not
+ * applied (paid twice, or paid after the order expired and its stock was gone): refund it.
+ */
+export const payments = pgTable(
+  "payments",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    orderId: integer("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "restrict" }),
+    /** Unique per attempt, e.g. SY-7K4Q9M2X-P3F8Q2A9. */
+    reference: text().notNull().unique(),
+    /** Amount asked for, in KES cents: the order total when the attempt started. */
+    amount: bigint({ mode: "number" }).notNull(),
+    status: paymentStatus().notNull().default("pending"),
+    /** Paystack's transaction id, once verified. */
+    paystackId: bigint("paystack_id", { mode: "number" }),
+    /** e.g. "mobile_money" or "card", once verified. */
+    channel: text(),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index("payments_order_id_created_at_idx").on(table.orderId, table.createdAt),
+    check("payments_amount_nonnegative", sql`${table.amount} >= 0`),
+  ],
+);
+
 export const categoriesRelations = relations(categories, ({ many }) => ({
   products: many(products),
 }));
@@ -223,6 +266,11 @@ export const cartItemsRelations = relations(cartItems, ({ one }) => ({
 export const ordersRelations = relations(orders, ({ one, many }) => ({
   user: one(user, { fields: [orders.userId], references: [user.id] }),
   items: many(orderItems),
+  payments: many(payments),
+}));
+
+export const paymentsRelations = relations(payments, ({ one }) => ({
+  order: one(orders, { fields: [payments.orderId], references: [orders.id] }),
 }));
 
 export const orderItemsRelations = relations(orderItems, ({ one }) => ({

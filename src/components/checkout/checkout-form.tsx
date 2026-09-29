@@ -26,6 +26,8 @@ export function CheckoutForm({ checkoutKey, lines, defaultName }: Props) {
 
   const [state, submit, pending] = useActionState(
     async (previous: PlaceOrderState, formData: FormData) => {
+      // On success the action redirects to Paystack. "placed" means the order exists but payment
+      // couldn't be started, so the order page offers to try again.
       const result = await placeOrderAction(previous, formData);
       if (result.status === "placed") {
         setCount(result.count);
@@ -158,10 +160,10 @@ export function CheckoutForm({ checkoutKey, lines, defaultName }: Props) {
       )}
 
       <button type="submit" disabled={pending || placed} className="btn btn-primary mt-8 w-full">
-        {pending || placed ? "Placing order…" : "Place order"}
+        {pending || placed ? "Placing order…" : "Continue to payment"}
       </button>
       <p className="mt-3 text-center text-xs text-muted">
-        No payment is taken now. Your order is held as awaiting payment.
+        You&apos;ll pay with M-Pesa or card on Paystack&apos;s secure page.
       </p>
     </form>
   );

@@ -1,11 +1,27 @@
 import Link from "next/link";
 
 import { OrderSummary } from "@/components/checkout/order-summary";
-import { formatOrderDate, orderStatusLabel } from "@/lib/catalog";
-import type { Order } from "@/lib/orders";
+import { orderStatusText } from "@/components/orders/order-status";
+import { PayButton } from "@/components/orders/pay-button";
+import { formatOrderDate, formatPaymentTime, formatPrice, paymentChannelLabel } from "@/lib/catalog";
+import { isPaymentOpen, paymentDueAt, type Order } from "@/lib/orders";
 
-/** The order page shared by the post-checkout confirmation and the account order history. */
-export function OrderDetail({ order, variant }: { order: Order; variant: "confirmation" | "detail" }) {
+/**
+ * The order page shared by the post-checkout confirmation, the payment callback and the account
+ * order history. `notice` is shown above the details, e.g. the result of a payment.
+ */
+export function OrderDetail({
+  order,
+  variant,
+  notice,
+}: {
+  order: Order;
+  variant: "confirmation" | "detail";
+  notice?: React.ReactNode;
+}) {
+  const payable = isPaymentOpen(order);
+  const channel = paymentChannelLabel(order.payment?.channel ?? null);
+
   return (
     <section aria-labelledby="order-heading" className="container-page section">
       {variant === "detail" && (
@@ -34,11 +50,23 @@ export function OrderDetail({ order, variant }: { order: Order; variant: "confir
         </aside>
 
         <div className="lg:col-span-7">
+          {notice}
           <dl className="divide-y border-y">
             <div className="flex flex-wrap justify-between gap-x-6 gap-y-1 py-4">
               <dt className="label text-muted">Status</dt>
-              <dd>{orderStatusLabel(order.status)}</dd>
+              <dd>{orderStatusText(order)}</dd>
             </div>
+            {order.paidAt && (
+              <div className="flex flex-wrap justify-between gap-x-6 gap-y-1 py-4">
+                <dt className="label text-muted">Payment</dt>
+                <dd className="text-right">
+                  Paid {formatOrderDate(order.paidAt)}
+                  {channel && ` · ${channel}`}
+                  <br />
+                  <span className="text-sm text-muted">Ref. {order.paymentReference}</span>
+                </dd>
+              </div>
+            )}
             <div className="flex flex-wrap justify-between gap-x-6 gap-y-1 py-4">
               <dt className="label text-muted">Deliver to</dt>
               <dd className="text-right">
@@ -54,9 +82,30 @@ export function OrderDetail({ order, variant }: { order: Order; variant: "confir
               <dd>{order.deliveryPhone}</dd>
             </div>
           </dl>
-          {order.status === "pending_payment" && (
-            <p className="mt-6 text-sm text-muted">No payment has been taken for this order yet.</p>
+
+          {payable && (
+            <div className="mt-8 border border-line-strong p-6">
+              <p className="text-sm">
+                Your items are reserved until {formatPaymentTime(paymentDueAt(order.createdAt))}. Pay with M-Pesa or
+                card on Paystack&apos;s secure page.
+              </p>
+              <div className="mt-6">
+                <PayButton reference={order.reference} label={`Pay ${formatPrice(order.total)}`} />
+              </div>
+            </div>
           )}
+          {order.status === "pending_payment" && !payable && (
+            <p className="mt-6 text-sm text-muted">
+              The payment window for this order has closed and its items are being returned to stock.
+            </p>
+          )}
+          {order.status === "expired" && (
+            <p className="mt-6 text-sm text-muted">
+              We didn&apos;t receive payment in time, so this order was cancelled and its items returned to stock. If
+              you were charged for it, contact Client Services and we&apos;ll refund you.
+            </p>
+          )}
+
           {variant === "confirmation" ? (
             <Link href="/collections/new-in" className="btn btn-secondary mt-8">
               Continue shopping

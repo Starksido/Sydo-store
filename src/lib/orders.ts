@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { orderItems, orders } from "@/db/schema";
+import { orderItems, orders, payments } from "@/db/schema";
 import type { Delivery } from "@/lib/delivery";
 import { stockDecrementCtes } from "@/lib/stock";
 
@@ -31,9 +31,27 @@ export type PlaceOrderResult =
 
 const REFERENCE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; // 32 symbols, no 0/O/1/I
 
+/** `length` random symbols from the reference alphabet. */
+export function randomCode(length: number) {
+  return Array.from(randomBytes(length), (byte) => REFERENCE_ALPHABET[byte % 32]).join("");
+}
+
 /** Random public order number, e.g. SY-7K4Q9M2X. 32^8 values, so collisions are negligible. */
 function createReference() {
-  return `SY-${Array.from(randomBytes(8), (byte) => REFERENCE_ALPHABET[byte % 32]).join("")}`;
+  return `SY-${randomCode(8)}`;
+}
+
+/** How long a new order holds its stock while waiting for payment. */
+export const PAYMENT_WINDOW_MINUTES = 60;
+
+/** When the payment window of an order placed at `createdAt` closes. */
+export function paymentDueAt(createdAt: Date) {
+  return new Date(createdAt.getTime() + PAYMENT_WINDOW_MINUTES * 60_000);
+}
+
+/** Whether the customer can still start a payment for the order. */
+export function isPaymentOpen(order: { status: string; createdAt: Date }, now = new Date()) {
+  return order.status === "pending_payment" && now < paymentDueAt(order.createdAt);
 }
 
 function isPositiveInt(value: unknown): value is number {
@@ -180,12 +198,23 @@ export async function placeOrder(
   return { ok: false, reason: "out-of-stock", shortages: [...shortages.values()] };
 }
 
-/** The order with its items, or undefined if it doesn't exist or isn't this user's. */
+/**
+ * The order with its items and the payment that paid it (if any), or undefined if it doesn't exist
+ * or isn't this user's.
+ */
 export async function getOrderForUser(userId: string, reference: string) {
-  return db.query.orders.findFirst({
+  const order = await db.query.orders.findFirst({
     where: and(eq(orders.reference, reference), eq(orders.userId, userId)),
     with: { items: { orderBy: asc(orderItems.id) } },
   });
+  if (!order) return undefined;
+  const [payment] = order.paymentReference
+    ? await db
+        .select({ reference: payments.reference, channel: payments.channel, paidAt: payments.paidAt })
+        .from(payments)
+        .where(eq(payments.reference, order.paymentReference))
+    : [];
+  return { ...order, payment: payment ?? null };
 }
 
 export const ORDERS_PAGE_SIZE = 10;
