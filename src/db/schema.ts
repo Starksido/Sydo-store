@@ -57,6 +57,12 @@ export const products = pgTable(
     gallery: text().array().notNull().default(sql`'{}'::text[]`),
     details: text().array().notNull().default(sql`'{}'::text[]`),
     badge: text(),
+    /**
+     * Set when an admin archives the product: the storefront, carts and checkout then treat it as
+     * gone (see `@/lib/products` and `@/lib/cart`). Stock and payments ignore it, so a late payment
+     * for an order that includes it still goes through. Null = on sale.
+     */
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()

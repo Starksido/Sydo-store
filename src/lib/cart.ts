@@ -2,16 +2,18 @@
 // Prices are always read from `products`; nothing here accepts a price from the caller.
 // All sizes of a product in a cart share `products.stock`. neon-http has no interactive
 // transactions, so each write checks stock in the same SQL statement that changes the row.
-import { asc, eq, sql } from "drizzle-orm";
+// Archived products count as removed: their lines stay (and come back if the product is unarchived)
+// but show as no longer available, can't be added or raised, and are left out of checkout.
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { cartItems, carts, products, type ProductSize } from "@/db/schema";
 
 export type CartLine = {
   id: number;
-  /** Null when the product has been deleted; the line is then shown as removed. */
+  /** Null when the product has been deleted or archived; the line is then shown as removed. */
   product: { id: number; slug: string; name: string; image: string; price: number; stock: number } | null;
-  /** Current product name, or the name saved when added if the product was deleted. */
+  /** Current product name, or the name saved when added if the product was deleted or archived. */
   name: string;
   /** Null for one-size items. */
   size: string | null;
@@ -57,8 +59,8 @@ export async function getCart(userId: string): Promise<Cart> {
     })
     .from(cartItems)
     .innerJoin(carts, eq(cartItems.cartId, carts.id))
-    // Left join: rows for deleted products stay in the cart with a null product.
-    .leftJoin(products, eq(cartItems.productId, products.id))
+    // Left join: rows for deleted or archived products stay in the cart with a null product.
+    .leftJoin(products, and(eq(cartItems.productId, products.id), isNull(products.archivedAt)))
     .where(eq(carts.userId, userId))
     .orderBy(asc(cartItems.id));
 
@@ -109,7 +111,7 @@ export async function reconcileCart(userId: string): Promise<Set<number>> {
         least(${cartItems.quantity}, greatest(coalesce(${products.stock}, 0) - ${heldBefore}, 0))::int as available
       from ${cartItems}
       join locked on locked.id = ${cartItems.id}
-      join ${products} on ${products.id} = ${cartItems.productId}
+      join ${products} on ${products.id} = ${cartItems.productId} and ${products.archivedAt} is null
     )
     update cart_items ci
     set quantity = fit.available, updated_at = now()
@@ -125,7 +127,7 @@ export async function getCartProduct(productId: number) {
   const [row] = await db
     .select({ slug: products.slug, stock: products.stock, sizes: products.sizes })
     .from(products)
-    .where(eq(products.id, productId));
+    .where(and(eq(products.id, productId), isNull(products.archivedAt)));
   return row as { slug: string; stock: number; sizes: ProductSize[] | null } | undefined;
 }
 
@@ -149,6 +151,7 @@ export async function addCartItem(userId: string, productId: number, size: strin
     select ${cartId}::int, p.id, p.name, ${size}::text, ${quantity}::int
     from products p
     where p.id = ${productId}::int
+      and p.archived_at is null
       and ${quantity}::int + (
         select coalesce(sum(ci.quantity), 0) from cart_items ci
         where ci.cart_id = ${cartId}::int and ci.product_id = p.id
@@ -162,7 +165,8 @@ export async function addCartItem(userId: string, productId: number, size: strin
 
 /**
  * Sets a line's quantity. Lowering is always allowed; raising only while the product's total in
- * the cart stays within stock. Returns false if nothing changed (over stock, or not this user's line).
+ * the cart stays within stock. Returns false if nothing changed (over stock, not this user's line,
+ * or the product was deleted or archived).
  */
 export async function setCartItemQuantity(userId: string, lineId: number, quantity: number) {
   const { rows } = await db.execute(sql`
@@ -172,6 +176,7 @@ export async function setCartItemQuantity(userId: string, lineId: number, quanti
     where ci.id = ${lineId}::int
       and ci.cart_id = (select id from carts where user_id = ${userId})
       and p.id = ci.product_id
+      and p.archived_at is null
       and (
         ${quantity}::int <= ci.quantity
         or ${quantity}::int + (

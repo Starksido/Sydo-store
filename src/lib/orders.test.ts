@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { db } from "@/db";
 import { products, user } from "@/db/schema";
+import { setProductArchived } from "@/lib/admin/products";
 import type { Delivery } from "@/lib/delivery";
 import { getOrderForUser, listOrdersForUser, placeOrder, type CheckoutLine } from "@/lib/orders";
 
@@ -187,6 +188,28 @@ describe("placeOrder", () => {
     expect(await getCartQuantities(userId)).toEqual({ [line]: 2, [deleted]: 1 });
     expect(await getCartQuantities(otherId)).toEqual({ [othersLine]: 1 });
     expect(await orderCount()).toBe(0);
+  });
+
+  it("refuses, changing nothing, when a product was archived after checkout loaded", async () => {
+    const userId = await createUser();
+    const a = await createProduct(5);
+    const b = await createProduct(5);
+    const kept = await createCartLine(userId, a, 1);
+    const archived = await createCartLine(userId, b, 1);
+    await setProductArchived(b, true);
+
+    const lines = [
+      { lineId: kept, quantity: 1 },
+      { lineId: archived, quantity: 1 },
+    ];
+    expect(await order(userId, lines)).toEqual({ ok: false, reason: "cart-changed" });
+    expect([await getStock(a), await getStock(b)]).toEqual([5, 5]);
+    expect(await getCartQuantities(userId)).toEqual({ [kept]: 1, [archived]: 1 });
+    expect(await orderCount()).toBe(0);
+
+    // Unarchived, the same checkout goes through.
+    await setProductArchived(b, false);
+    expect(await order(userId, lines)).toMatchObject({ ok: true });
   });
 
   it("rejects invalid input", async () => {

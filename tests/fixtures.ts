@@ -41,6 +41,15 @@ export async function createProduct(stock: number, price = 1000) {
   return product.id;
 }
 
+/** Creates a category and returns its id. */
+export async function createCategory(name = `Category ${randomUUID().slice(0, 8)}`) {
+  const [category] = await db
+    .insert(categories)
+    .values({ slug: `test-${randomUUID().slice(0, 8)}`, name })
+    .returning({ id: categories.id });
+  return category.id;
+}
+
 export async function getStock(productId: number) {
   const [row] = await db.select({ stock: products.stock }).from(products).where(eq(products.id, productId));
   return row?.stock;

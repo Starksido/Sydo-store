@@ -3,8 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-// Sections are added here as their pages are built: Products, Categories, Stock, then Orders.
-const sections = [{ label: "Overview", href: "/admin" }];
+// Sections are added here as their pages are built: Stock, then Orders.
+const sections = [
+  { label: "Overview", href: "/admin" },
+  { label: "Products", href: "/admin/products" },
+  { label: "Categories", href: "/admin/categories" },
+];
 
 function isCurrent(pathname: string, href: string) {
   return href === "/admin" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);

@@ -1,5 +1,6 @@
-// Product and category queries. Server-only: this module imports the database client.
-import { asc, desc, eq, isNotNull, ne, sql } from "drizzle-orm";
+// Product and category queries for the storefront. Server-only: this module imports the database
+// client. Archived products are left out everywhere, as if they didn't exist.
+import { and, asc, desc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { cache } from "react";
 
 import { db } from "@/db";
@@ -41,6 +42,8 @@ type ProductRow = typeof products.$inferSelect & {
 
 const withCategory = { category: { columns: { slug: true, name: true } } } as const;
 
+const onSale = isNull(products.archivedAt);
+
 function toProduct(row: ProductRow): Product {
   return {
     id: row.id,
@@ -61,14 +64,14 @@ function toProduct(row: ProductRow): Product {
 }
 
 export async function getProductSlugs() {
-  const rows = await db.select({ slug: products.slug }).from(products);
+  const rows = await db.select({ slug: products.slug }).from(products).where(onSale);
   return rows.map((row) => row.slug);
 }
 
 /** Deduplicated per request, so metadata and the page share one query. */
 export const getProductBySlug = cache(async (slug: string) => {
   const row = await db.query.products.findFirst({
-    where: eq(products.slug, slug),
+    where: and(eq(products.slug, slug), onSale),
     with: withCategory,
   });
   return row ? toProduct(row) : undefined;
@@ -76,6 +79,7 @@ export const getProductBySlug = cache(async (slug: string) => {
 
 export async function getNewArrivals(limit = 8) {
   const rows = await db.query.products.findMany({
+    where: onSale,
     with: withCategory,
     orderBy: [desc(products.createdAt), desc(products.id)],
     limit,
@@ -89,7 +93,7 @@ export async function getRelatedProducts(product: Product, limit = 4) {
     .select({ product: products, category: { slug: categories.slug, name: categories.name } })
     .from(products)
     .innerJoin(categories, eq(products.categoryId, categories.id))
-    .where(ne(products.id, product.id))
+    .where(and(ne(products.id, product.id), onSale))
     .orderBy(
       sql`${categories.slug} = ${product.category.slug} desc`,
       desc(products.createdAt),
@@ -115,7 +119,7 @@ export const getCategoryBySlug = cache(async (slug: string) => {
 /** Products in one category, newest first. */
 export async function getCategoryProducts(categoryId: number) {
   const rows = await db.query.products.findMany({
-    where: eq(products.categoryId, categoryId),
+    where: and(eq(products.categoryId, categoryId), onSale),
     with: withCategory,
     orderBy: [desc(products.createdAt), desc(products.id)],
   });

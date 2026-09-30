@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
+import { listAdminCategories } from "@/lib/admin/categories";
+import { countAdminProducts } from "@/lib/admin/products";
 import { requireAdmin } from "@/lib/session";
 
 import { adminMetadata } from "./admin-metadata";
@@ -11,6 +14,19 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function AdminOverviewPage() {
   const { user } = await requireAdmin("/admin");
+  const [productCounts, categories] = await Promise.all([countAdminProducts(), listAdminCategories()]);
+
+  const sections = [
+    {
+      href: "/admin/products",
+      title: "Products",
+      stats: [
+        { label: "On sale", value: productCounts.active },
+        { label: "Archived", value: productCounts.archived },
+      ],
+    },
+    { href: "/admin/categories", title: "Categories", stats: [{ label: "Categories", value: categories.length }] },
+  ];
 
   return (
     <section aria-labelledby="admin-heading" className="container-page section">
@@ -20,7 +36,26 @@ export default async function AdminOverviewPage() {
       <p className="mt-3 text-muted">
         Signed in as <span className="break-all text-ink">{user.email}</span>.
       </p>
-      <p className="mt-10 border-y py-10 text-muted">Products, categories and stock will be managed here.</p>
+
+      <ul className="mt-10 grid gap-px border bg-line sm:grid-cols-2">
+        {sections.map((section) => (
+          <li key={section.href} className="bg-paper">
+            <Link href={section.href} className="group block p-6">
+              <h2 className="heading-3">
+                <span className="link-quiet group-hover:decoration-current">{section.title}</span>
+              </h2>
+              <dl className="mt-4 flex gap-8">
+                {section.stats.map((stat) => (
+                  <div key={stat.label}>
+                    <dt className="eyebrow text-muted">{stat.label}</dt>
+                    <dd className="mt-1 text-xl tabular-nums">{stat.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </Link>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

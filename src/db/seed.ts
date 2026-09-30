@@ -1,5 +1,8 @@
-// Loads the sample catalog into the database. Safe to re-run: rows are upserted by slug.
+// Loads the sample catalog into the database. Safe to re-run: it only adds categories and products
+// whose slug is missing, and never changes existing ones (admins may have edited them).
 // Run with: npm run db:seed
+import { inArray } from "drizzle-orm";
+
 import { unsplash } from "../lib/catalog";
 import { db } from "./index";
 import { categories, products, type ProductSize } from "./schema";
@@ -191,42 +194,41 @@ const seedProducts: SeedProduct[] = [
   },
 ];
 
-async function seed() {
-  const categoryIds = new Map<string, number>();
-  for (const category of seedCategories) {
-    const { slug, ...rest } = category;
-    const [row] = await db
-      .insert(categories)
-      .values(category)
-      .onConflictDoUpdate({ target: categories.slug, set: rest })
-      .returning({ id: categories.id });
-    categoryIds.set(slug, row.id);
-  }
+/** Adds the missing sample categories and products. Returns how many of each it added. */
+export async function seedCatalog() {
+  const addedCategories = await db
+    .insert(categories)
+    .values(seedCategories)
+    .onConflictDoNothing({ target: categories.slug })
+    .returning({ id: categories.id });
+  const categoryRows = await db
+    .select({ id: categories.id, slug: categories.slug })
+    .from(categories)
+    .where(inArray(categories.slug, seedCategories.map((category) => category.slug)));
+  const categoryIds = new Map(categoryRows.map((row) => [row.slug, row.id]));
 
-  // One hour apart, newest first, so re-seeding keeps a stable New Arrivals order.
+  // One hour apart, newest first, for a stable New Arrivals order.
   const newest = Date.UTC(2026, 8, 1);
-  for (const [index, product] of seedProducts.entries()) {
-    const { category, slug, ...rest } = product;
+  const productRows = seedProducts.map(({ category, ...product }, index) => {
     const categoryId = categoryIds.get(category);
-    if (!categoryId) throw new Error(`Unknown category "${category}" for ${slug}`);
-    const values = {
-      ...rest,
-      sizes: rest.sizes ?? null,
-      altImage: rest.altImage ?? null,
-      badge: rest.badge ?? null,
-      categoryId,
-      createdAt: new Date(newest - index * 60 * 60 * 1000),
-    };
-    await db
-      .insert(products)
-      .values({ slug, ...values })
-      .onConflictDoUpdate({ target: products.slug, set: values });
-  }
+    if (!categoryId) throw new Error(`Unknown category "${category}" for ${product.slug}`);
+    return { ...product, categoryId, createdAt: new Date(newest - index * 60 * 60 * 1000) };
+  });
+  const addedProducts = await db
+    .insert(products)
+    .values(productRows)
+    .onConflictDoNothing({ target: products.slug })
+    .returning({ id: products.id });
 
-  console.log(`Seeded ${categoryIds.size} categories and ${seedProducts.length} products.`);
+  return { categories: addedCategories.length, products: addedProducts.length };
 }
 
-seed().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+// Runs only as a script (`npm run db:seed`), not when a test imports `seedCatalog`.
+if (process.argv[1]?.replaceAll("\\", "/").endsWith("src/db/seed.ts")) {
+  seedCatalog()
+    .then((added) => console.log(`Added ${added.categories} categories and ${added.products} products.`))
+    .catch((error) => {
+      console.error(error);
+      process.exit(1);
+    });
+}

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { db } from "@/db";
 import { products } from "@/db/schema";
+import { setProductArchived } from "@/lib/admin/products";
 import { confirmPayment, expireUnpaidOrders, MAX_PAYMENT_ATTEMPTS, startPayment } from "@/lib/payments";
 
 import { createProduct, createUser, getStock, resetCatalog, setStock } from "../../tests/fixtures";
@@ -252,6 +253,15 @@ describe("confirmPayment", () => {
       expect(await getStock(product)).toBe(3);
 
       expect((await confirmPayment(payment)).outcome).toBe("already-paid");
+      expect(await getStock(product)).toBe(3);
+    });
+
+    it("reinstates it even when a product in it was archived since", async () => {
+      const { reference, product, payment } = await expiredOrder();
+      await setProductArchived(product, true);
+
+      expect((await confirmPayment(payment)).outcome).toBe("paid");
+      expect(await getOrderRow(reference)).toMatchObject({ status: "paid", paymentReference: payment });
       expect(await getStock(product)).toBe(3);
     });
 

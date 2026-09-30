@@ -10,6 +10,7 @@ import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { orderItems, orders, payments } from "@/db/schema";
 import type { Delivery } from "@/lib/delivery";
+import { pgError } from "@/lib/pg-error";
 import { stockDecrementCtes } from "@/lib/stock";
 
 /** A cart line as the customer saw it at checkout. */
@@ -56,12 +57,6 @@ export function isPaymentOpen(order: { status: string; createdAt: Date }, now = 
 
 function isPositiveInt(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) > 0;
-}
-
-/** Postgres SQLSTATE and constraint from a driver error, unwrapping drizzle's DrizzleQueryError. */
-function pgError(error: unknown) {
-  const e = error as { code?: string; constraint?: string; cause?: { code?: string; constraint?: string } };
-  return { code: e.cause?.code ?? e.code, constraint: e.cause?.constraint ?? e.constraint };
 }
 
 async function findOrderReference(userId: string, checkoutKey: string) {
@@ -120,9 +115,16 @@ export async function placeOrder(
         order by ci.id
         for update of ci
       ),
+      -- A line whose product was deleted or archived since checkout loaded doesn't match. The
+      -- archive check reads the latest committed row without locking it, so an archive that commits
+      -- while this statement runs may not be seen.
       matched as (
         select s.line_id, s.quantity, cl.product_id, cl.product_name, cl.size,
-          coalesce(cl.product_id is not null and cl.quantity = s.quantity, false) as ok
+          coalesce(
+            cl.quantity = s.quantity
+              and exists (select 1 from products p where p.id = cl.product_id and p.archived_at is null),
+            false
+          ) as ok
         from snapshot s
         left join cart_lines cl on cl.id = s.line_id
       ),
