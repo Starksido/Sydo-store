@@ -3,6 +3,7 @@ import Form from "next/form";
 import Image from "next/image";
 import Link from "next/link";
 
+import { SavedNotice } from "@/components/admin/saved-notice";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { listAdminCategories } from "@/lib/admin/categories";
 import { listAdminProducts, type ProductStatusFilter } from "@/lib/admin/products";
@@ -51,6 +52,7 @@ export default async function AdminProductsPage({ searchParams }: PageProps<"/ad
     return search ? `/admin/products?${search}` : "/admin/products";
   };
   const filtered = Boolean(q || categoryId || status !== "active");
+  const deleted = one(params.saved) === "deleted";
 
   return (
     <section aria-labelledby="products-heading" className="container-page section">
@@ -62,6 +64,12 @@ export default async function AdminProductsPage({ searchParams }: PageProps<"/ad
           New product
         </Link>
       </div>
+
+      {deleted && (
+        <div className="mt-8">
+          <SavedNotice>Product deleted. The store shows the change within a minute.</SavedNotice>
+        </div>
+      )}
 
       <Form action="/admin/products" className="mt-8 grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_auto] lg:items-end">
         <label className="block">

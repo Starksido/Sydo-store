@@ -13,7 +13,7 @@ import {
   type StockField,
   type StockFormValues,
 } from "@/lib/admin/product-input";
-import { createProduct, setProductArchived, updateProduct } from "@/lib/admin/products";
+import { createProduct, deleteProduct, setProductArchived, updateProduct } from "@/lib/admin/products";
 import { requireAdmin } from "@/lib/session";
 import { adjustStock, setStockTo } from "@/lib/stock";
 
@@ -68,6 +68,24 @@ export async function setProductArchivedAction(id: unknown, archived: unknown): 
 
   revalidateStorefront();
   redirect(`/admin/products/${id}?saved=${archived ? "archived" : "unarchived"}`);
+}
+
+/**
+ * Bound to the product's id by the edit page. If it can't be deleted (not archived, or ordered
+ * since the page loaded), the edit page explains why.
+ */
+export async function deleteProductAction(id: unknown): Promise<void> {
+  await requireAdmin("/admin/products");
+  if (!isId(id)) notFound();
+
+  const result = await deleteProduct(id);
+  if (!result.ok) {
+    if (result.reason === "not-found") notFound();
+    redirect(`/admin/products/${id}#delete`);
+  }
+
+  revalidateStorefront();
+  redirect("/admin/products?saved=deleted");
 }
 
 /**

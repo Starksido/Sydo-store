@@ -172,3 +172,15 @@ export const primaryNav = [
   { label: "Shoes", href: "/collections/shoes" },
   { label: "Accessories", href: "/collections/accessories" },
 ];
+
+/** Category slugs the content above links to (menu, hero, collections, campaign). They can't be deleted. */
+export function linkedCategorySlugs() {
+  const hrefs = [
+    hero.primary.href,
+    hero.secondary.href,
+    campaign.cta.href,
+    ...featuredCollections.map((collection) => collection.href),
+    ...primaryNav.map((link) => link.href),
+  ];
+  return new Set(hrefs.flatMap((href) => /^\/collections\/([^/?#]+)$/.exec(href)?.[1] ?? []));
+}

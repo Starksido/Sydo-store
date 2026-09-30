@@ -4,11 +4,12 @@ import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createCategoryAction, updateCategoryAction } from "@/app/admin/categories/actions";
+import { createCategoryAction, deleteCategoryAction, updateCategoryAction } from "@/app/admin/categories/actions";
 import { changeOrderStatusAction, recordRefundAction, setTrackingAction } from "@/app/admin/orders/actions";
 import {
   adjustStockAction,
   createProductAction,
+  deleteProductAction,
   setProductArchivedAction,
   updateProductAction,
 } from "@/app/admin/products/actions";
@@ -116,8 +117,10 @@ describe("admin Server Functions", () => {
     await expect(createCategoryAction(idle, categoryForm())).rejects.toThrow("NOT_FOUND");
     await expect(updateCategoryAction(categoryId, idle, categoryForm())).rejects.toThrow("NOT_FOUND");
     await expect(adjustStockAction(productId, idle, stockForm({}))).rejects.toThrow("NOT_FOUND");
+    await expect(deleteProductAction(productId)).rejects.toThrow("NOT_FOUND");
+    await expect(deleteCategoryAction(categoryId)).rejects.toThrow("NOT_FOUND");
 
-    expect(requireAdmin).toHaveBeenCalledTimes(6);
+    expect(requireAdmin).toHaveBeenCalledTimes(8);
     expect(await snapshot()).toEqual(before);
     expect(revalidatePath).not.toHaveBeenCalled();
   });
@@ -172,6 +175,28 @@ describe("admin Server Functions", () => {
     }
     await expect(setProductArchivedAction(productId, "yes")).rejects.toThrow("NOT_FOUND");
     await expect(setProductArchivedAction(999_999, true)).rejects.toThrow("NOT_FOUND");
+  });
+
+  it("delete archived, never-ordered products and unused categories; refused deletes return to the edit page", async () => {
+    signedInAsAdmin();
+    const productId = await createProduct(5);
+    const [{ categoryId }] = await db.select({ categoryId: products.categoryId }).from(products);
+
+    await expect(deleteProductAction(productId)).rejects.toThrow(`REDIRECT /admin/products/${productId}#delete`);
+    await expect(deleteCategoryAction(categoryId)).rejects.toThrow(`REDIRECT /admin/categories/${categoryId}#delete`);
+    expect(revalidatePath).not.toHaveBeenCalled();
+
+    await db.update(products).set({ archivedAt: new Date() }).where(eq(products.id, productId));
+    await expect(deleteProductAction(productId)).rejects.toThrow("REDIRECT /admin/products?saved=deleted");
+    await expect(deleteCategoryAction(categoryId)).rejects.toThrow("REDIRECT /admin/categories?saved=deleted");
+    expect(await db.select().from(products)).toEqual([]);
+    expect(await db.select().from(categories)).toEqual([]);
+    expect(revalidatePath).toHaveBeenCalledWith("/products/[slug]", "page");
+
+    for (const id of [productId, "1", -1]) {
+      await expect(deleteProductAction(id)).rejects.toThrow("NOT_FOUND");
+      await expect(deleteCategoryAction(id)).rejects.toThrow("NOT_FOUND");
+    }
   });
 
   it("create and update categories", async () => {

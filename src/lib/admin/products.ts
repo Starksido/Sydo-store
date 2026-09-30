@@ -167,3 +167,38 @@ export async function countLowStockProducts(threshold = LOW_STOCK_THRESHOLD) {
     .where(and(isNull(products.archivedAt), lte(products.stock, threshold)));
   return row;
 }
+
+/** Whether any order holds the product. Ordered products stay archived; they can't be deleted. */
+export async function isProductOrdered(id: number) {
+  const { rows } = await db.execute<{ ordered: boolean }>(
+    sql`select exists (select 1 from order_items where product_id = ${id}::int) as ordered`,
+  );
+  return rows[0].ordered;
+}
+
+export type DeleteProductResult = { ok: true } | { ok: false; reason: "not-found" | "not-archived" | "ordered" };
+
+/**
+ * Deletes an archived product that was never ordered, with its stock history, in one statement.
+ * Bags that held it show it as no longer available (`cart_items.product_id` is set null).
+ * Checkout skips archived products, so no order can take it while this runs.
+ */
+export async function deleteProduct(id: number): Promise<DeleteProductResult> {
+  const { rows } = await db.execute<{ id: number }>(sql`
+    with gone as (
+      delete from products p
+      where p.id = ${id}::int and p.archived_at is not null
+        and not exists (select 1 from order_items oi where oi.product_id = p.id)
+      returning p.id
+    ),
+    history as (
+      delete from stock_adjustments where product_id in (select id from gone)
+    )
+    select id from gone
+  `);
+  if (rows.length > 0) return { ok: true };
+
+  const product = await db.query.products.findFirst({ where: eq(products.id, id), columns: { archivedAt: true } });
+  if (!product) return { ok: false, reason: "not-found" };
+  return { ok: false, reason: product.archivedAt ? "ordered" : "not-archived" };
+}

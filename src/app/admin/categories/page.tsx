@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 
+import { SavedNotice } from "@/components/admin/saved-notice";
 import { listAdminCategories } from "@/lib/admin/categories";
 import { requireAdmin } from "@/lib/session";
 
@@ -11,9 +12,10 @@ export async function generateMetadata(): Promise<Metadata> {
   return adminMetadata({ title: "Categories" });
 }
 
-export default async function AdminCategoriesPage() {
+export default async function AdminCategoriesPage({ searchParams }: PageProps<"/admin/categories">) {
   await requireAdmin("/admin/categories");
   const categories = await listAdminCategories();
+  const deleted = (await searchParams).saved === "deleted";
 
   return (
     <section aria-labelledby="categories-heading" className="container-page section">
@@ -26,9 +28,15 @@ export default async function AdminCategoriesPage() {
         </Link>
       </div>
       <p className="mt-3 max-w-2xl text-muted">
-        Every product belongs to one category. Categories can&apos;t be deleted; move their products to another
-        category instead.
+        Every product belongs to one category. A category can be deleted once no product is in it, on sale or
+        archived, and the store&apos;s menu and home page don&apos;t link to it.
       </p>
+
+      {deleted && (
+        <div className="mt-8">
+          <SavedNotice>Category deleted.</SavedNotice>
+        </div>
+      )}
 
       {categories.length === 0 ? (
         <p className="mt-8 border-y py-10 text-muted">There are no categories yet.</p>

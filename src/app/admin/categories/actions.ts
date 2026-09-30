@@ -2,7 +2,7 @@
 
 import { notFound, redirect } from "next/navigation";
 
-import { createCategory, updateCategory } from "@/lib/admin/categories";
+import { createCategory, deleteCategory, updateCategory } from "@/lib/admin/categories";
 import {
   parseCategoryInput,
   readCategoryForm,
@@ -52,4 +52,19 @@ export async function updateCategoryAction(
 
   revalidateStorefront();
   redirect(`/admin/categories/${id}?saved=1`);
+}
+
+/** Bound to the category's id by the edit page. If it can't be deleted, the edit page explains why. */
+export async function deleteCategoryAction(id: unknown): Promise<void> {
+  await requireAdmin("/admin/categories");
+  if (!isId(id)) notFound();
+
+  const result = await deleteCategory(id);
+  if (!result.ok) {
+    if (result.reason === "not-found") notFound();
+    redirect(`/admin/categories/${id}#delete`);
+  }
+
+  revalidateStorefront();
+  redirect("/admin/categories?saved=deleted");
 }

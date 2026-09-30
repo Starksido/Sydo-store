@@ -10,12 +10,12 @@ import { StockForm } from "@/components/admin/stock-form";
 import { StockHistory } from "@/components/admin/stock-history";
 import { listAdminCategories } from "@/lib/admin/categories";
 import { productFormValues } from "@/lib/admin/product-input";
-import { getAdminProduct } from "@/lib/admin/products";
+import { getAdminProduct, isProductOrdered } from "@/lib/admin/products";
 import { requireAdmin } from "@/lib/session";
 import { getStockHistory } from "@/lib/stock";
 
 import { adminMetadata } from "../../admin-metadata";
-import { adjustStockAction, setProductArchivedAction, updateProductAction } from "../actions";
+import { adjustStockAction, deleteProductAction, setProductArchivedAction, updateProductAction } from "../actions";
 
 export async function generateMetadata(): Promise<Metadata> {
   return adminMetadata({ title: "Edit product" });
@@ -36,10 +36,11 @@ export default async function EditProductPage({ params, searchParams }: PageProp
   await requireAdmin("/admin/products");
   const { id: idText } = await params;
   const id = /^\d{1,9}$/.test(idText) ? Number(idText) : 0;
-  const [product, categories, history] = await Promise.all([
+  const [product, categories, history, ordered] = await Promise.all([
     id ? getAdminProduct(id) : undefined,
     listAdminCategories(),
     id ? getStockHistory(id) : [],
+    id ? isProductOrdered(id) : false,
   ]);
   if (!product) notFound();
 
@@ -153,6 +154,34 @@ export default async function EditProductPage({ params, searchParams }: PageProp
               confirmLabel="Yes, archive it"
               warning={`${product.name} will disappear from the store, and customers can't buy it.`}
             />
+          )}
+        </div>
+
+        <div id="delete" className="mt-16 scroll-mt-header border-t pt-10" role="region" aria-labelledby="delete-heading">
+          <h2 id="delete-heading" className="heading-3">
+            Delete
+          </h2>
+          {!archived ? (
+            <p className="mt-2 text-sm text-muted">
+              Only archived products that were never ordered can be deleted. Archive it first.
+            </p>
+          ) : ordered ? (
+            <p className="mt-2 text-sm text-muted">
+              It has been ordered, so it can&apos;t be deleted: orders still refer to it. It stays archived.
+            </p>
+          ) : (
+            <>
+              <p className="mt-2 mb-6 text-sm text-muted">
+                Never ordered, so it can be deleted for good, with its stock history. Bags that hold it show it
+                as no longer available.
+              </p>
+              <ConfirmButton
+                action={deleteProductAction.bind(null, product.id)}
+                label="Delete product"
+                confirmLabel="Yes, delete it"
+                warning={`${product.name} and its stock history will be deleted. This can't be undone.`}
+              />
+            </>
           )}
         </div>
       </div>

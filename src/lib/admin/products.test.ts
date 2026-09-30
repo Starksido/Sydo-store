@@ -3,22 +3,42 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { db } from "@/db";
-import { products } from "@/db/schema";
-import { createCategory, getAdminCategory, listAdminCategories, updateCategory } from "@/lib/admin/categories";
+import { cartItems, products, stockAdjustments } from "@/db/schema";
+import {
+  createCategory,
+  deleteCategory,
+  getAdminCategory,
+  listAdminCategories,
+  updateCategory,
+} from "@/lib/admin/categories";
 import type { ProductInput } from "@/lib/admin/product-input";
 import {
   countAdminProducts,
   countLowStockProducts,
   createProduct,
+  deleteProduct,
   escapeLike,
   getAdminProduct,
+  isProductOrdered,
   listAdminProducts,
   listLowStockProducts,
   setProductArchived,
   updateProduct,
 } from "@/lib/admin/products";
 
-import { createCategory as createCategoryFixture, getStock, resetCatalog, setStock } from "../../../tests/fixtures";
+import { linkedCategorySlugs } from "@/lib/catalog";
+import { adjustStock } from "@/lib/stock";
+
+import {
+  createCartLine,
+  createCategory as createCategoryFixture,
+  createProduct as createProductFixture,
+  createUser,
+  getStock,
+  resetCatalog,
+  setStock,
+} from "../../../tests/fixtures";
+import { createOrder } from "../../../tests/orders";
 
 const IMAGE = "https://images.unsplash.com/photo-1496747611176-843222e1e57c?w=1200";
 
@@ -127,6 +147,42 @@ describe("setProductArchived", () => {
   });
 });
 
+describe("deleteProduct", () => {
+  it("deletes an archived product that was never ordered, with its stock history, keeping bag lines", async () => {
+    const [adminId, customerId] = [await createUser(), await createUser()];
+    const id = await createProductFixture(5);
+    await adjustStock({ productId: id, delta: 2, userId: adminId, reason: "received", note: null });
+    const lineId = await createCartLine(customerId, id, 1);
+
+    expect(await deleteProduct(id)).toEqual({ ok: false, reason: "not-archived" });
+    expect(await getAdminProduct(id)).toBeDefined();
+
+    await setProductArchived(id, true);
+    expect(await isProductOrdered(id)).toBe(false);
+    expect(await deleteProduct(id)).toEqual({ ok: true });
+
+    expect(await getAdminProduct(id)).toBeUndefined();
+    expect(await db.select().from(stockAdjustments)).toEqual([]);
+    expect(await db.select().from(cartItems).where(eq(cartItems.id, lineId))).toEqual([
+      expect.objectContaining({ productId: null, productName: "Saved name", quantity: 1 }),
+    ]);
+    expect(await deleteProduct(id)).toEqual({ ok: false, reason: "not-found" });
+  });
+
+  it("refuses a product that was ordered, even when archived, and keeps its history", async () => {
+    const [adminId, customerId] = [await createUser(), await createUser()];
+    const id = await createProductFixture(5);
+    await adjustStock({ productId: id, delta: 1, userId: adminId, reason: "correction", note: null });
+    await createOrder(customerId, [[id, 1]]);
+    await setProductArchived(id, true);
+
+    expect(await isProductOrdered(id)).toBe(true);
+    expect(await deleteProduct(id)).toEqual({ ok: false, reason: "ordered" });
+    expect(await getAdminProduct(id)).toBeDefined();
+    expect(await db.select().from(stockAdjustments)).toHaveLength(1);
+  });
+});
+
 describe("listAdminProducts", () => {
   async function catalog() {
     const [dresses, bags] = [await createCategoryFixture("Dresses"), await createCategoryFixture("Bags")];
@@ -209,6 +265,31 @@ describe("categories", () => {
     expect(await createCategory(category)).toEqual(taken);
     expect(await updateCategory(other.id, category)).toEqual(taken);
     expect(await updateCategory(999_999, category)).toBeUndefined();
+  });
+
+  it("deletes a category only once no product is in it, on sale or archived", async () => {
+    // "evening" is linked from the home page, so not that one.
+    const result = await createCategory({ ...category, slug: "cruise" });
+    if (!result.ok) throw new Error("createCategory failed");
+    const productId = await created(await createProduct(input(result.id)));
+    await setProductArchived(productId, true);
+
+    expect(await deleteCategory(result.id)).toEqual({ ok: false, reason: "in-use" });
+    expect(await getAdminCategory(result.id)).toBeDefined();
+
+    await db.delete(products).where(eq(products.id, productId));
+    expect(await deleteCategory(result.id)).toEqual({ ok: true });
+    expect(await getAdminCategory(result.id)).toBeUndefined();
+    expect(await deleteCategory(result.id)).toEqual({ ok: false, reason: "not-found" });
+  });
+
+  it("refuses to delete a category the store links to", async () => {
+    const [slug] = linkedCategorySlugs();
+    const result = await createCategory({ ...category, slug });
+    if (!result.ok) throw new Error("createCategory failed");
+
+    expect(await deleteCategory(result.id)).toEqual({ ok: false, reason: "linked" });
+    expect(await getAdminCategory(result.id)).toBeDefined();
   });
 
   it("lists categories without products, in position order", async () => {
