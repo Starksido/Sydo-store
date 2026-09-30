@@ -64,6 +64,13 @@
       "when": 1790757713432,
       "tag": "0008_clear_zombie",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790760435177,
+      "tag": "0009_silly_iceman",
+      "breakpoints": true
     }
   ]
 }

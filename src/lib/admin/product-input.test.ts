@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
 
+import { stockAdjustmentReason } from "@/db/schema";
 import {
   EMPTY_PRODUCT_FORM,
   isUnsplashUrl,
   parseCategoryInput,
   parseProductInput,
+  parseStockInput,
   productFormValues,
   readProductForm,
   slugify,
+  STOCK_REASONS,
   type ProductFormValues,
 } from "@/lib/admin/product-input";
+import { STOCK_ADJUSTMENT_REASONS } from "@/lib/stock";
 
 const IMAGE = "https://images.unsplash.com/photo-1496747611176-843222e1e57c?auto=format&fit=crop&w=1200&q=80";
 
@@ -186,5 +190,47 @@ describe("helpers", () => {
   it("isUnsplashUrl accepts only https images.unsplash.com paths", () => {
     expect(isUnsplashUrl(IMAGE)).toBe(true);
     expect(isUnsplashUrl("not a url")).toBe(false);
+  });
+});
+
+describe("parseStockInput", () => {
+  const base = { mode: "add", quantity: "5", reason: "received", note: "", expected: "3" };
+
+  it("turns add and remove into a relative change, and set into one checked against what was shown", () => {
+    expect(parseStockInput({ ...base, note: " Invoice 42 " })).toEqual({
+      ok: true,
+      input: { mode: "adjust", delta: 5, reason: "received", note: "Invoice 42" },
+    });
+    expect(parseStockInput({ ...base, mode: "remove", quantity: "1,000", reason: "damaged" })).toEqual({
+      ok: true,
+      input: { mode: "adjust", delta: -1000, reason: "damaged", note: null },
+    });
+    expect(parseStockInput({ ...base, mode: "set", quantity: "0", reason: "correction" })).toEqual({
+      ok: true,
+      input: { mode: "set", stock: 0, expected: 3, reason: "correction", note: null },
+    });
+  });
+
+  it("refuses bad modes, quantities, reasons and notes", () => {
+    const errors = (values: Partial<typeof base>) => {
+      const result = parseStockInput({ ...base, ...values });
+      return result.ok ? {} : result.errors;
+    };
+    expect(errors({ mode: "double" })).toHaveProperty("mode");
+    for (const quantity of ["", "0", "-1", "1.5", "abc", "1000001"]) {
+      expect(errors({ quantity }), quantity).toHaveProperty("quantity");
+    }
+    expect(errors({ mode: "set", quantity: "0" })).toEqual({});
+    expect(errors({ reason: "" })).toHaveProperty("reason");
+    expect(errors({ reason: "stolen" })).toHaveProperty("reason");
+    expect(errors({ note: "x".repeat(501) })).toHaveProperty("note");
+    expect(errors({ mode: "set", expected: "" })).toHaveProperty("expected");
+    // A relative change doesn't need what was shown.
+    expect(errors({ expected: "" })).toEqual({});
+  });
+
+  it("offers exactly the reasons the database accepts", () => {
+    expect(STOCK_REASONS.map((r) => r.value)).toEqual([...STOCK_ADJUSTMENT_REASONS]);
+    expect(STOCK_REASONS.map((r) => r.value)).toEqual(stockAdjustmentReason.enumValues);
   });
 });

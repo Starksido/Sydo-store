@@ -80,7 +80,13 @@ export function ProductForm({ action, initial, categories, submitLabel }: Props)
         <textarea {...props("details", true)} rows={5} className="input py-3" />
       </Field>
 
-      <SizeRows defaultValue={values.sizes} error={errors.sizes} />
+      <SizeRows
+        // React resets the form after a failed save, putting checkboxes back to their defaults. Keyed
+        // by the submitted sizes, the rows remount with them as the default, so the reset keeps them.
+        key={JSON.stringify(values.sizes)}
+        defaultValue={values.sizes}
+        error={errors.sizes}
+      />
 
       <div className="space-y-8">
         <ImageField id="image" label="Main image" defaultValue={values.image} error={errors.image} required />

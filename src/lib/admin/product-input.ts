@@ -282,3 +282,80 @@ export function parseCategoryInput(values: CategoryFormValues): ParseResult<Cate
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return { ok: true, input: { name, slug: slug!, image: image || null, position } };
 }
+
+// ---------- Stock adjustments ----------
+
+// Kept in step with `STOCK_ADJUSTMENT_REASONS` in `@/lib/stock`, which this client-safe module can't import.
+export const STOCK_REASONS = [
+  { value: "received", label: "Received stock" },
+  { value: "correction", label: "Count correction" },
+  { value: "damaged", label: "Damaged or lost" },
+  { value: "returned", label: "Customer return" },
+  { value: "other", label: "Other" },
+] as const;
+
+export type StockReason = (typeof STOCK_REASONS)[number]["value"];
+
+export type StockMode = "add" | "remove" | "set";
+
+export type StockFormValues = { mode: string; quantity: string; reason: string; note: string };
+
+export type StockField = keyof StockFormValues;
+
+export type StockInput = { reason: StockReason; note: string | null } & (
+  | { mode: "adjust"; delta: number }
+  | { mode: "set"; stock: number; expected: number }
+);
+
+const MAX_STOCK = 1_000_000;
+
+export function readStockForm(formData: FormData): StockFormValues & { expected: string } {
+  return {
+    mode: text(formData, "mode"),
+    quantity: text(formData, "quantity"),
+    reason: text(formData, "reason"),
+    note: text(formData, "note"),
+    expected: text(formData, "expected"),
+  };
+}
+
+/**
+ * "Add N" and "Remove N" become a relative change; "Set to N" becomes an absolute one that only
+ * applies if stock is still `expected`, the number the admin was shown.
+ */
+export function parseStockInput(
+  values: StockFormValues & { expected: string },
+): ParseResult<StockInput, StockField | "expected"> {
+  const errors: FieldErrors<StockField | "expected"> = {};
+
+  const mode = (["add", "remove", "set"] as const).find((m) => m === values.mode);
+  if (!mode) errors.mode = "Choose add, remove or set.";
+
+  const quantityText = values.quantity.trim().replace(/,/g, "");
+  const quantity = Number(quantityText);
+  const min = mode === "set" ? 0 : 1;
+  if (!quantityText) errors.quantity = "Enter a number of units.";
+  else if (!/^\d+$/.test(quantityText)) errors.quantity = "Enter a whole number of units.";
+  else if (quantity < min || quantity > MAX_STOCK) {
+    errors.quantity = `Enter ${min} to ${MAX_STOCK.toLocaleString("en-KE")}.`;
+  }
+
+  const reason = STOCK_REASONS.find((r) => r.value === values.reason)?.value;
+  if (!reason) errors.reason = "Choose a reason.";
+
+  const note = values.note.trim();
+  if (note.length > 500) errors.note = "Use 500 characters or fewer.";
+
+  const expected = /^\d{1,7}$/.test(values.expected.trim()) ? Number(values.expected) : NaN;
+  if (mode === "set" && !(expected <= MAX_STOCK)) errors.expected = "Reload the page and try again.";
+
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+  const meta = { reason: reason!, note: note || null };
+  return {
+    ok: true,
+    input:
+      mode === "set"
+        ? { ...meta, mode: "set", stock: quantity, expected }
+        : { ...meta, mode: "adjust", delta: mode === "add" ? quantity : -quantity },
+  };
+}

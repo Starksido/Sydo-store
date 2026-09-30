@@ -6,13 +6,16 @@ import { ConfirmButton } from "@/components/admin/confirm-button";
 import { ProductForm } from "@/components/admin/product-form";
 import { SavedNotice } from "@/components/admin/saved-notice";
 import { StatusBadge } from "@/components/admin/status-badge";
+import { StockForm } from "@/components/admin/stock-form";
+import { StockHistory } from "@/components/admin/stock-history";
 import { listAdminCategories } from "@/lib/admin/categories";
 import { productFormValues } from "@/lib/admin/product-input";
 import { getAdminProduct } from "@/lib/admin/products";
 import { requireAdmin } from "@/lib/session";
+import { getStockHistory } from "@/lib/stock";
 
 import { adminMetadata } from "../../admin-metadata";
-import { setProductArchivedAction, updateProductAction } from "../actions";
+import { adjustStockAction, setProductArchivedAction, updateProductAction } from "../actions";
 
 export async function generateMetadata(): Promise<Metadata> {
   return adminMetadata({ title: "Edit product" });
@@ -24,15 +27,26 @@ const SAVED_MESSAGES: Record<string, string> = {
   unarchived: "Back on sale. Bags that held it show it again.",
 };
 
+const STOCK_MESSAGES: Record<string, string> = {
+  stock: "Stock updated. The store shows it within a minute.",
+  "stock-same": "Stock was already at that number, so nothing changed.",
+};
+
 export default async function EditProductPage({ params, searchParams }: PageProps<"/admin/products/[id]">) {
   await requireAdmin("/admin/products");
   const { id: idText } = await params;
   const id = /^\d{1,9}$/.test(idText) ? Number(idText) : 0;
-  const [product, categories] = await Promise.all([id ? getAdminProduct(id) : undefined, listAdminCategories()]);
+  const [product, categories, history] = await Promise.all([
+    id ? getAdminProduct(id) : undefined,
+    listAdminCategories(),
+    id ? getStockHistory(id) : [],
+  ]);
   if (!product) notFound();
 
   const saved = (await searchParams).saved;
   const savedMessage = typeof saved === "string" ? SAVED_MESSAGES[saved] : undefined;
+  const stockMessage = typeof saved === "string" ? STOCK_MESSAGES[saved] : undefined;
+  const initial = productFormValues(product);
   const archived = Boolean(product.archivedAt);
 
   return (
@@ -50,8 +64,13 @@ export default async function EditProductPage({ params, searchParams }: PageProp
         <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
           <div className="flex gap-2">
             <dt className="text-muted">Stock</dt>
-            <dd className={product.stock === 0 ? "text-error" : undefined}>
-              {product.stock === 0 ? "Sold out" : product.stock}
+            <dd>
+              <span className={product.stock === 0 ? "text-error" : undefined}>
+                {product.stock === 0 ? "Sold out" : product.stock}
+              </span>{" "}
+              <a href="#stock" className="link text-muted">
+                Adjust
+              </a>
             </dd>
           </div>
           <div className="flex gap-2">
@@ -78,13 +97,37 @@ export default async function EditProductPage({ params, searchParams }: PageProp
 
         <div className="mt-10">
           <ProductForm
-            // Remount after each save so every field shows what was stored (e.g. a generated slug).
-            key={product.updatedAt.getTime()}
+            // Remount when the saved values change (e.g. a generated slug) so every field shows them.
+            // Not keyed on updated_at: stock changes bump it and would clear unsaved edits here.
+            key={JSON.stringify(initial)}
             action={updateProductAction.bind(null, product.id)}
-            initial={productFormValues(product)}
+            initial={initial}
             categories={categories.map(({ id, name }) => ({ id, name }))}
             submitLabel="Save changes"
           />
+        </div>
+
+        <div id="stock" className="mt-16 scroll-mt-header border-t pt-10" role="region" aria-labelledby="stock-heading">
+          <h2 id="stock-heading" className="heading-3">
+            Stock
+          </h2>
+          <p className="mt-2 mb-6 text-sm text-muted">
+            Shared across all sizes. Sales and expired orders change it automatically; record deliveries,
+            counts and losses here.
+          </p>
+          {stockMessage && (
+            <div className="mb-6">
+              <SavedNotice>{stockMessage}</SavedNotice>
+            </div>
+          )}
+          <StockForm
+            // A fresh form after each recorded change.
+            key={history[0]?.id ?? 0}
+            action={adjustStockAction.bind(null, product.id)}
+            stock={product.stock}
+          />
+          <h3 className="mt-12 mb-2 label">History</h3>
+          <StockHistory entries={history} />
         </div>
 
         <div className="mt-16 border-t pt-10" role="region" aria-labelledby="archive-heading">

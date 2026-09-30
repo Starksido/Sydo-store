@@ -79,6 +79,44 @@ export const products = pgTable(
   ],
 );
 
+export const stockAdjustmentReason = pgEnum("stock_adjustment_reason", [
+  "received",
+  "correction",
+  "damaged",
+  "returned",
+  "other",
+]);
+
+/**
+ * One row per manual stock change by an admin, written by `@/lib/stock` in the same statement as
+ * the change. Checkout, expiry and late payments aren't recorded here.
+ */
+export const stockAdjustments = pgTable(
+  "stock_adjustments",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    /** Null once the product has been deleted. */
+    productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
+    /** The admin who made the change. */
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    delta: integer().notNull(),
+    previousStock: integer("previous_stock").notNull(),
+    newStock: integer("new_stock").notNull(),
+    reason: stockAdjustmentReason().notNull(),
+    note: text(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("stock_adjustments_product_id_created_at_idx").on(table.productId, table.createdAt),
+    check("stock_adjustments_delta_nonzero", sql`${table.delta} <> 0`),
+    check("stock_adjustments_new_stock_nonnegative", sql`${table.newStock} >= 0`),
+    check("stock_adjustments_delta_matches", sql`${table.newStock} = ${table.previousStock} + ${table.delta}`),
+    check("stock_adjustments_note_length", sql`char_length(${table.note}) <= 500`),
+  ],
+);
+
 /** One cart per signed-in user, created on first add. */
 export const carts = pgTable("carts", {
   id: integer().primaryKey().generatedAlwaysAsIdentity(),

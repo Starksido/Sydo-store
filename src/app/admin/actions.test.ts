@@ -5,12 +5,17 @@ import { revalidatePath } from "next/cache";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createCategoryAction, updateCategoryAction } from "@/app/admin/categories/actions";
-import { createProductAction, setProductArchivedAction, updateProductAction } from "@/app/admin/products/actions";
+import {
+  adjustStockAction,
+  createProductAction,
+  setProductArchivedAction,
+  updateProductAction,
+} from "@/app/admin/products/actions";
 import { db } from "@/db";
-import { categories, products } from "@/db/schema";
+import { categories, products, stockAdjustments } from "@/db/schema";
 import { requireAdmin } from "@/lib/session";
 
-import { createCategory, createProduct, resetCatalog } from "../../../tests/fixtures";
+import { createCategory, createProduct, createUser, getStock, resetCatalog, setStock } from "../../../tests/fixtures";
 
 vi.mock("@/lib/session", () => ({ requireAdmin: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -31,8 +36,8 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function signedInAsAdmin() {
-  vi.mocked(requireAdmin).mockResolvedValue({ user: { id: "admin", role: "admin" } } as Awaited<
+function signedInAsAdmin(id = "admin") {
+  vi.mocked(requireAdmin).mockResolvedValue({ user: { id, role: "admin" } } as Awaited<
     ReturnType<typeof requireAdmin>
   >);
 }
@@ -67,11 +72,20 @@ function categoryForm(overrides: Record<string, string> = {}) {
   return form;
 }
 
-/** Every catalog row, to show that a refused action wrote nothing. */
+function stockForm(fields: Record<string, string>) {
+  const form = new FormData();
+  for (const [key, value] of Object.entries({ mode: "add", quantity: "3", reason: "received", note: "", ...fields })) {
+    form.set(key, value);
+  }
+  return form;
+}
+
+/** Every catalog and stock log row, to show that a refused action wrote nothing. */
 async function snapshot() {
   const { rows } = await db.execute(sql`
     select (select coalesce(json_agg(p order by p.id), '[]') from products p) as products,
-      (select coalesce(json_agg(c order by c.id), '[]') from categories c) as categories
+      (select coalesce(json_agg(c order by c.id), '[]') from categories c) as categories,
+      (select coalesce(json_agg(s order by s.id), '[]') from stock_adjustments s) as adjustments
   `);
   return rows[0];
 }
@@ -90,8 +104,9 @@ describe("admin Server Functions", () => {
     await expect(setProductArchivedAction(productId, true)).rejects.toThrow("NOT_FOUND");
     await expect(createCategoryAction(idle, categoryForm())).rejects.toThrow("NOT_FOUND");
     await expect(updateCategoryAction(categoryId, idle, categoryForm())).rejects.toThrow("NOT_FOUND");
+    await expect(adjustStockAction(productId, idle, stockForm({}))).rejects.toThrow("NOT_FOUND");
 
-    expect(requireAdmin).toHaveBeenCalledTimes(5);
+    expect(requireAdmin).toHaveBeenCalledTimes(6);
     expect(await snapshot()).toEqual(before);
     expect(revalidatePath).not.toHaveBeenCalled();
   });
@@ -164,5 +179,45 @@ describe("admin Server Functions", () => {
       status: "invalid",
       errors: { slug: "Another category already uses this slug." },
     });
+  });
+
+  it("change stock as the signed-in admin, and explain refused changes", async () => {
+    const adminId = await createUser();
+    signedInAsAdmin(adminId);
+    const productId = await createProduct(5);
+
+    await expect(adjustStockAction(productId, idle, stockForm({ note: "Invoice 7" }))).rejects.toThrow(
+      `REDIRECT /admin/products/${productId}?saved=stock#stock`,
+    );
+    expect(await getStock(productId)).toBe(8);
+    expect(await db.select().from(stockAdjustments)).toMatchObject([
+      { productId, userId: adminId, delta: 3, previousStock: 5, newStock: 8, reason: "received", note: "Invoice 7" },
+    ]);
+    expect(revalidatePath).toHaveBeenCalled();
+
+    expect(await adjustStockAction(productId, idle, stockForm({ mode: "remove", quantity: "9", reason: "damaged" }))).toEqual({
+      status: "error",
+      values: expect.objectContaining({ quantity: "9" }),
+      errors: { quantity: "There are only 8 in stock, so you can remove at most 8." },
+      current: 8,
+    });
+
+    // "Set to" checks against the stock the page showed: a sale in between makes it stale.
+    await setStock(productId, 6);
+    expect(
+      await adjustStockAction(productId, idle, stockForm({ mode: "set", quantity: "20", reason: "correction", expected: "8" })),
+    ).toMatchObject({ status: "error", current: 6, message: expect.stringContaining("Stock changed to 6") });
+    await expect(
+      adjustStockAction(productId, idle, stockForm({ mode: "set", quantity: "6", reason: "correction", expected: "6" })),
+    ).rejects.toThrow(`REDIRECT /admin/products/${productId}?saved=stock-same#stock`);
+    expect(await getStock(productId)).toBe(6);
+    expect(await db.select().from(stockAdjustments)).toHaveLength(1);
+
+    expect(await adjustStockAction(productId, idle, stockForm({ quantity: "0", reason: "" }))).toMatchObject({
+      status: "error",
+      errors: { quantity: expect.any(String), reason: expect.any(String) },
+    });
+    await expect(adjustStockAction(999_999, idle, stockForm({}))).rejects.toThrow("NOT_FOUND");
+    await expect(adjustStockAction("1", idle, stockForm({}))).rejects.toThrow("NOT_FOUND");
   });
 });

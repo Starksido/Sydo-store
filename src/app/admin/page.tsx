@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { listAdminCategories } from "@/lib/admin/categories";
-import { countAdminProducts } from "@/lib/admin/products";
+import { countAdminProducts, countLowStockProducts } from "@/lib/admin/products";
+import { LOW_STOCK_THRESHOLD } from "@/lib/catalog";
 import { requireAdmin } from "@/lib/session";
 
 import { adminMetadata } from "./admin-metadata";
@@ -14,7 +15,11 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function AdminOverviewPage() {
   const { user } = await requireAdmin("/admin");
-  const [productCounts, categories] = await Promise.all([countAdminProducts(), listAdminCategories()]);
+  const [productCounts, lowStock, categories] = await Promise.all([
+    countAdminProducts(),
+    countLowStockProducts(),
+    listAdminCategories(),
+  ]);
 
   const sections = [
     {
@@ -25,7 +30,15 @@ export default async function AdminOverviewPage() {
         { label: "Archived", value: productCounts.archived },
       ],
     },
-    { href: "/admin/categories", title: "Categories", stats: [{ label: "Categories", value: categories.length }] },
+    {
+      href: "/admin/stock",
+      title: "Stock",
+      stats: [
+        { label: "Sold out", value: lowStock.soldOut },
+        { label: `1–${LOW_STOCK_THRESHOLD} left`, value: lowStock.low },
+      ],
+    },
+    { href: "/admin/categories", title: "Categories", stats: [{ label: "Total", value: categories.length }] },
   ];
 
   return (
@@ -37,7 +50,7 @@ export default async function AdminOverviewPage() {
         Signed in as <span className="break-all text-ink">{user.email}</span>.
       </p>
 
-      <ul className="mt-10 grid gap-px border bg-line sm:grid-cols-2">
+      <ul className="mt-10 grid gap-px border bg-line sm:grid-cols-3">
         {sections.map((section) => (
           <li key={section.href} className="bg-paper">
             <Link href={section.href} className="group block p-6">

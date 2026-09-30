@@ -1,11 +1,12 @@
 // Admin product queries and writes. Server-only: this module imports the database client.
 // Not a Server Function on purpose: callers (the admin Server Functions) call `requireAdmin` first.
 // Nothing here changes stock; that stays in `@/lib/stock`.
-import { and, desc, eq, ilike, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, isNotNull, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/db";
 import { categories, products } from "@/db/schema";
 import type { FieldErrors, ProductField, ProductInput } from "@/lib/admin/product-input";
+import { LOW_STOCK_THRESHOLD } from "@/lib/catalog";
 import { pgError } from "@/lib/pg-error";
 
 export type ProductStatusFilter = "active" | "archived" | "all";
@@ -136,4 +137,33 @@ export async function setProductArchived(id: number, archived: boolean) {
     .where(eq(products.id, id))
     .returning({ id: products.id });
   return rows.length > 0;
+}
+
+/** Products on sale with stock at or below `threshold`, lowest first. */
+export async function listLowStockProducts(threshold = LOW_STOCK_THRESHOLD) {
+  return db
+    .select({
+      id: products.id,
+      name: products.name,
+      sku: products.sku,
+      image: products.image,
+      stock: products.stock,
+      category: { name: categories.name },
+    })
+    .from(products)
+    .innerJoin(categories, eq(products.categoryId, categories.id))
+    .where(and(isNull(products.archivedAt), lte(products.stock, threshold)))
+    .orderBy(asc(products.stock), asc(products.name), asc(products.id));
+}
+
+/** Products on sale that are sold out, and that are low but not out, for the overview. */
+export async function countLowStockProducts(threshold = LOW_STOCK_THRESHOLD) {
+  const [row] = await db
+    .select({
+      soldOut: sql<number>`count(*) filter (where ${products.stock} = 0)`.mapWith(Number),
+      low: sql<number>`count(*) filter (where ${products.stock} > 0)`.mapWith(Number),
+    })
+    .from(products)
+    .where(and(isNull(products.archivedAt), lte(products.stock, threshold)));
+  return row;
 }

@@ -8,10 +8,12 @@ import { createCategory, getAdminCategory, listAdminCategories, updateCategory }
 import type { ProductInput } from "@/lib/admin/product-input";
 import {
   countAdminProducts,
+  countLowStockProducts,
   createProduct,
   escapeLike,
   getAdminProduct,
   listAdminProducts,
+  listLowStockProducts,
   setProductArchived,
   updateProduct,
 } from "@/lib/admin/products";
@@ -216,5 +218,29 @@ describe("categories", () => {
       ["first", 0, 0],
       ["later", 0, 0],
     ]);
+  });
+});
+
+describe("low stock", () => {
+  it("lists products on sale at or below the threshold, lowest first, and counts them", async () => {
+    const categoryId = await createCategoryFixture();
+    const make = async (slug: string, stock: number) => {
+      const id = await created(await createProduct(input(categoryId, { name: slug, slug, sku: slug.toUpperCase() })));
+      await setStock(id, stock);
+      return id;
+    };
+    const two = await make("two", 2);
+    const out = await make("out", 0);
+    const three = await make("three", 3);
+    await make("plenty", 4);
+    const archived = await make("archived", 0);
+    await setProductArchived(archived, true);
+
+    expect((await listLowStockProducts()).map((p) => [p.id, p.stock])).toEqual([
+      [out, 0],
+      [two, 2],
+      [three, 3],
+    ]);
+    expect(await countLowStockProducts()).toEqual({ soldOut: 1, low: 2 });
   });
 });

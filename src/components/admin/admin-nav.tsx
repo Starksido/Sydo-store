@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-// Sections are added here as their pages are built: Stock, then Orders.
+// Sections are added here as their pages are built; Orders is next.
 const sections = [
   { label: "Overview", href: "/admin" },
   { label: "Products", href: "/admin/products" },
   { label: "Categories", href: "/admin/categories" },
+  { label: "Stock", href: "/admin/stock" },
 ];
 
 function isCurrent(pathname: string, href: string) {
@@ -19,7 +20,7 @@ export function AdminNav() {
 
   return (
     <nav aria-label="Admin" className="border-b">
-      <ul className="container-page flex h-12 items-center gap-6 overflow-x-auto">
+      <ul className="container-page flex h-12 items-center gap-5 overflow-x-auto sm:gap-6">
         {sections.map((section) => (
           <li key={section.href} className="shrink-0">
             <Link
