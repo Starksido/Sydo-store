@@ -9,12 +9,12 @@ import { cartItems, carts, categories, products, user } from "@/db/schema";
 
 import { assertTestDatabaseName } from "./test-env";
 
-/** Empties the catalog, stock adjustments, carts, orders, payments and users. Re-checks the server-side database name before truncating. */
+/** Empties the catalog, stock adjustments, carts, orders, payments, users and role changes. Re-checks the server-side database name before truncating. */
 export async function resetCatalog() {
   const { rows } = await db.execute<{ name: string }>(sql`select current_database() as name`);
   assertTestDatabaseName(rows[0].name);
   await db.execute(
-    sql`truncate order_events, stock_adjustments, payments, order_items, orders, cart_items, carts, products, categories, "user" restart identity cascade`,
+    sql`truncate role_changes, order_events, stock_adjustments, payments, order_items, orders, cart_items, carts, products, categories, "user" restart identity cascade`,
   );
 }
 

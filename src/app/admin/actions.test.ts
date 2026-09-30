@@ -13,8 +13,9 @@ import {
   setProductArchivedAction,
   updateProductAction,
 } from "@/app/admin/products/actions";
+import { setUserRoleAction } from "@/app/admin/users/actions";
 import { db } from "@/db";
-import { categories, orderEvents, orders, payments, products, stockAdjustments } from "@/db/schema";
+import { categories, orderEvents, orders, payments, products, roleChanges, stockAdjustments, user } from "@/db/schema";
 import { requireAdmin } from "@/lib/session";
 
 import { createCategory, createProduct, createUser, getStock, resetCatalog, setStock } from "../../../tests/fixtures";
@@ -91,7 +92,9 @@ async function snapshot() {
       (select coalesce(json_agg(s order by s.id), '[]') from stock_adjustments s) as adjustments,
       (select coalesce(json_agg(o order by o.id), '[]') from orders o) as orders,
       (select coalesce(json_agg(e order by e.id), '[]') from order_events e) as events,
-      (select coalesce(json_agg(p order by p.id), '[]') from payments p) as payments
+      (select coalesce(json_agg(p order by p.id), '[]') from payments p) as payments,
+      (select coalesce(json_agg(u.role order by u.id), '[]') from "user" u) as roles,
+      (select coalesce(json_agg(r order by r.id), '[]') from role_changes r) as role_changes
   `);
   return rows[0];
 }
@@ -108,6 +111,7 @@ describe("admin Server Functions", () => {
   it("refuse customers before reading or writing anything", async () => {
     const categoryId = await createCategory();
     const productId = await createProduct(5);
+    const userId = await createUser();
     const before = await snapshot();
     signedInAsCustomer();
 
@@ -119,8 +123,9 @@ describe("admin Server Functions", () => {
     await expect(adjustStockAction(productId, idle, stockForm({}))).rejects.toThrow("NOT_FOUND");
     await expect(deleteProductAction(productId)).rejects.toThrow("NOT_FOUND");
     await expect(deleteCategoryAction(categoryId)).rejects.toThrow("NOT_FOUND");
+    await expect(setUserRoleAction(userId, "admin")).rejects.toThrow("NOT_FOUND");
 
-    expect(requireAdmin).toHaveBeenCalledTimes(8);
+    expect(requireAdmin).toHaveBeenCalledTimes(9);
     expect(await snapshot()).toEqual(before);
     expect(revalidatePath).not.toHaveBeenCalled();
   });
@@ -196,6 +201,33 @@ describe("admin Server Functions", () => {
     for (const id of [productId, "1", -1]) {
       await expect(deleteProductAction(id)).rejects.toThrow("NOT_FOUND");
       await expect(deleteCategoryAction(id)).rejects.toThrow("NOT_FOUND");
+    }
+  });
+
+  it("add and remove admins, going back to the user with what happened", async () => {
+    const adminId = await createUser();
+    await db.update(user).set({ role: "admin" }).where(eq(user.id, adminId));
+    signedInAsAdmin(adminId);
+    const userId = await createUser();
+    const [{ email }] = await db.select({ email: user.email }).from(user).where(eq(user.id, userId));
+    const back = `REDIRECT /admin/users?q=${encodeURIComponent(email)}&result=`;
+
+    await expect(setUserRoleAction(userId, "admin")).rejects.toThrow(`${back}added`);
+    await expect(setUserRoleAction(userId, "admin")).rejects.toThrow(`${back}unchanged`);
+    await expect(setUserRoleAction(userId, "user")).rejects.toThrow(`${back}removed`);
+    await expect(setUserRoleAction(adminId, "user")).rejects.toThrow("result=self");
+    expect(await db.select({ toRole: roleChanges.toRole }).from(roleChanges)).toEqual([
+      { toRole: "admin" },
+      { toRole: "user" },
+    ]);
+
+    for (const [id, role] of [
+      ["nobody", "admin"],
+      [userId, "owner"],
+      [42, "admin"],
+      ["", "user"],
+    ]) {
+      await expect(setUserRoleAction(id, role)).rejects.toThrow("NOT_FOUND");
     }
   });
 

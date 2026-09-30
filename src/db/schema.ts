@@ -365,6 +365,33 @@ export const orderEvents = pgTable(
   ],
 );
 
+/**
+ * One row per change to a user's role (`user.role`, "user" or "admin") made on /admin/users,
+ * written by `setUserRole` in the same statement as the change. Roles set in SQL aren't recorded.
+ */
+export const roleChanges = pgTable(
+  "role_changes",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    /** Whose role changed. */
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    /** The admin who changed it. */
+    changedBy: text("changed_by")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    fromRole: text("from_role").notNull(),
+    toRole: text("to_role").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("role_changes_created_at_idx").on(table.createdAt),
+    check("role_changes_roles", sql`${table.fromRole} in ('user', 'admin') and ${table.toRole} in ('user', 'admin')`),
+    check("role_changes_role_changes", sql`${table.fromRole} <> ${table.toRole}`),
+  ],
+);
+
 export const categoriesRelations = relations(categories, ({ many }) => ({
   products: many(products),
 }));
