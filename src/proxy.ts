@@ -2,7 +2,7 @@ import { getSessionCookie } from "better-auth/cookies";
 import { NextResponse, type NextRequest } from "next/server";
 
 // Optimistic check only: a cookie can be expired or forged, so protected pages still call
-// `requireSession()`. This just skips rendering them for visitors who are clearly signed out.
+// `requireSession()` (or `requireAdmin()`). This just skips rendering them for visitors who are clearly signed out.
 export function proxy(request: NextRequest) {
   if (getSessionCookie(request)) return NextResponse.next();
 
@@ -13,5 +13,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/account/:path*", "/cart/:path*", "/checkout/:path*", "/orders/:path*"],
+  matcher: ["/account/:path*", "/cart/:path*", "/checkout/:path*", "/orders/:path*", "/admin/:path*"],
 };

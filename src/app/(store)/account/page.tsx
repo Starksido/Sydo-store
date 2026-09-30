@@ -85,7 +85,12 @@ export default async function AccountPage({ searchParams }: PageProps<"/account"
         )}
       </div>
 
-      <div className="mt-10">
+      <div className="mt-10 flex flex-wrap gap-4">
+        {user.role === "admin" && (
+          <Link href="/admin" className="btn btn-primary">
+            Admin
+          </Link>
+        )}
         <SignOutButton />
       </div>
     </section>

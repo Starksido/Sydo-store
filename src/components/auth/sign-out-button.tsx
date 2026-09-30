@@ -5,7 +5,7 @@ import { useTransition } from "react";
 
 import { authClient } from "@/lib/auth-client";
 
-export function SignOutButton() {
+export function SignOutButton({ className = "btn btn-secondary" }: { className?: string }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
 
@@ -17,7 +17,7 @@ export function SignOutButton() {
     });
 
   return (
-    <button type="button" onClick={signOut} disabled={pending} className="btn btn-secondary">
+    <button type="button" onClick={signOut} disabled={pending} className={className}>
       Sign out
     </button>
   );

@@ -1,5 +1,5 @@
 import { headers } from "next/headers";
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
 
 import { auth } from "@/lib/auth";
@@ -16,6 +16,17 @@ export const getSession = cache(async () => auth.api.getSession({ headers: await
 export async function requireSession(returnTo: string) {
   const session = await getSession();
   if (!session) redirect(`/sign-in?next=${encodeURIComponent(returnTo)}`);
+  return session;
+}
+
+/**
+ * Like `requireSession`, but signed-in users without the admin role get a 404, so the admin area
+ * looks like it doesn't exist. Call it in the admin layout, every admin page (layouts don't protect
+ * nested pages) and first in every admin Server Function.
+ */
+export async function requireAdmin(returnTo: string) {
+  const session = await requireSession(returnTo);
+  if (session.user.role !== "admin") notFound();
   return session;
 }
 

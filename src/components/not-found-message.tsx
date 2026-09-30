@@ -1,4 +1,8 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+
+/** The 404 page's metadata, shared by both not-found pages and the admin's (see `adminMetadata`). */
+export const notFoundMetadata: Metadata = { title: "Page not found" };
 
 /** The 404 page's content, shared by the root and `(store)` not-found pages. */
 export function NotFoundMessage() {

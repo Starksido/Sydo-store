@@ -47,6 +47,13 @@ export const auth = betterAuth({
   secret: readAuthSecret(),
   database: drizzleAdapter(db, { provider: "pg" }),
   emailAndPassword: { enabled: true },
+  user: {
+    additionalFields: {
+      // "user" or "admin". `input: false`: sign-up always stores the default and update-user refuses
+      // it, so the role can only be changed in the database.
+      role: { type: "string", required: true, defaultValue: "user", input: false },
+    },
+  },
   // Logs the cause of failed database queries, not just "Failed query".
   logger: authLogger,
   // Lets `auth.api.*` calls from Server Actions set cookies. Must stay the last plugin.
