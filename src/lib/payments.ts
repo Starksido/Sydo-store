@@ -4,7 +4,7 @@
 // An order is only ever marked paid by `confirmPayment`, after Paystack's verify API says the
 // transaction succeeded for the right order, amount and currency, never from a browser redirect.
 // neon-http has no interactive transactions, so each write is one SQL statement.
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { orders, payments } from "@/db/schema";
@@ -54,7 +54,8 @@ export async function startPayment(userId: string, email: string, orderReference
   // Locks the order, so an expiry sweep running at the same moment either sees this attempt or
   // has already expired the order (which then isn't selected). The attempt count comes from this
   // statement's snapshot, so attempts started at the very same moment can go a few over the limit;
-  // it only has to bound the work, not be exact.
+  // it only has to bound the work, not be exact. A new attempt also touches the order row, so an
+  // admin cancel racing this statement sees the row changed and refuses (see `changeOrderStatus`).
   // `amount` is a bigint, which the driver returns as a string.
   const { rows } = await db.execute<{ order_id: number; amount: string; payable: boolean; started: boolean }>(sql`
     with o as (
@@ -72,6 +73,11 @@ export async function startPayment(userId: string, email: string, orderReference
       where payable
         and (select count(*) from payments p where p.order_id = o.id) < ${MAX_PAYMENT_ATTEMPTS}
       returning order_id, amount
+    ),
+    touched as (
+      update orders set updated_at = now()
+      where id in (select order_id from attempt)
+      returning id
     )
     select o.id as order_id, o.total as amount, o.payable, a.order_id is not null as started
     from o
@@ -162,7 +168,21 @@ export async function confirmPayment(reference: string): Promise<ConfirmPaymentR
       `amount ${transaction.amount} (attempt ${attempt.amount}, order ${attempt.orderTotal})`,
   ].filter(Boolean);
   if (problems.length > 0) {
-    console.error(`[payments] ${reference} does not match order ${orderReference}: ${problems.join(", ")}`);
+    const detail = `Doesn't match order ${orderReference}: ${problems.join(", ")}`;
+    console.error(`[payments] ${reference} ${detail}`);
+    // Paystack took the money but the order can't take it, so it's owed back. Recorded once.
+    await db
+      .update(payments)
+      .set({
+        status: "success",
+        paystackId: transaction.id,
+        channel: transaction.channel,
+        paidAt: transaction.paidAt ?? new Date(),
+        refundStatus: "due",
+        refundReason: "mismatch",
+        refundDetail: detail,
+      })
+      .where(and(eq(payments.reference, reference), isNull(payments.refundStatus)));
     return { outcome: "mismatch", orderReference };
   }
 
@@ -173,13 +193,6 @@ export async function confirmPayment(reference: string): Promise<ConfirmPaymentR
       from orders
       where id = ${attempt.orderId}
       for update
-    ),
-    attempt as (
-      update payments
-      set status = 'success', paystack_id = ${transaction.id}, channel = ${transaction.channel},
-        paid_at = ${paidAt}::timestamptz, updated_at = now()
-      where reference = ${reference} and status <> 'success'
-      returning id
     ),
     -- Only an expired order needs its stock back; a deleted product (null id) fails the verdict.
     req as (
@@ -196,6 +209,28 @@ export async function confirmPayment(reference: string): Promise<ConfirmPaymentR
       from o, verdict v
       where orders.id = o.id and (o.status = 'pending_payment' or (o.status = 'expired' and v.ok))
       returning orders.id
+    ),
+    paid_event as (
+      insert into order_events (order_id, from_status, to_status)
+      select o.id, o.status, 'paid' from o, paid
+      returning id
+    ),
+    -- The first time this payment succeeds. If it didn't pay the order (already paid, cancelled, or
+    -- expired and sold out), the money is owed back: recorded as a refund due, in the same statement.
+    attempt as (
+      update payments
+      set status = 'success', paystack_id = ${transaction.id}, channel = ${transaction.channel},
+        paid_at = ${paidAt}::timestamptz, updated_at = now(),
+        refund_status = case when exists (select 1 from paid) then null else 'due'::refund_status end,
+        refund_reason = case
+          when exists (select 1 from paid) then null
+          when (select payment_reference from o) is not null then 'duplicate_payment'::refund_reason
+          else 'order_unavailable'::refund_reason
+        end,
+        refund_detail = case when exists (select 1 from paid) then null
+          else 'Order was ' || (select status::text from o) end
+      where reference = ${reference} and status <> 'success'
+      returning id
     )
     select o.status::text as previous_status, o.payment_reference,
       (select count(*) from paid)::int as applied
@@ -272,6 +307,11 @@ export async function expireUnpaidOrders({ limit = 100 }: { limit?: number } = {
         for update skip locked
       )
       returning o.id, o.reference
+    ),
+    expired_event as (
+      insert into order_events (order_id, from_status, to_status)
+      select id, 'pending_payment', 'expired' from expired
+      returning id
     ),
     restock_req as (
       select oi.product_id, sum(oi.quantity)::int as quantity

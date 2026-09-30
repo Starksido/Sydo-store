@@ -14,7 +14,7 @@ export async function resetCatalog() {
   const { rows } = await db.execute<{ name: string }>(sql`select current_database() as name`);
   assertTestDatabaseName(rows[0].name);
   await db.execute(
-    sql`truncate stock_adjustments, payments, order_items, orders, cart_items, carts, products, categories, "user" restart identity cascade`,
+    sql`truncate order_events, stock_adjustments, payments, order_items, orders, cart_items, carts, products, categories, "user" restart identity cascade`,
   );
 }
 

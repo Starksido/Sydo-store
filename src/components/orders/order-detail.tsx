@@ -3,7 +3,14 @@ import Link from "next/link";
 import { OrderSummary } from "@/components/checkout/order-summary";
 import { orderStatusText } from "@/components/orders/order-status";
 import { PayButton } from "@/components/orders/pay-button";
-import { formatOrderDate, formatPaymentTime, formatPrice, paymentChannelLabel } from "@/lib/catalog";
+import {
+  CANCEL_REASONS,
+  formatOrderDate,
+  formatPaymentTime,
+  formatPrice,
+  paymentChannelLabel,
+  refundText,
+} from "@/lib/catalog";
 import { isPaymentOpen, paymentDueAt, type Order } from "@/lib/orders";
 
 /**
@@ -21,6 +28,7 @@ export function OrderDetail({
 }) {
   const payable = isPaymentOpen(order);
   const channel = paymentChannelLabel(order.payment?.channel ?? null);
+  const tracking = [order.shippingCarrier, order.trackingNumber].filter(Boolean).join(" · ");
 
   return (
     <section aria-labelledby="order-heading" className="container-page section">
@@ -56,6 +64,26 @@ export function OrderDetail({
               <dt className="label text-muted">Status</dt>
               <dd>{orderStatusText(order)}</dd>
             </div>
+            {order.cancelReason && (
+              <div className="flex flex-wrap justify-between gap-x-6 gap-y-1 py-4">
+                <dt className="label text-muted">Reason</dt>
+                <dd className="text-right">{CANCEL_REASONS[order.cancelReason].customer}</dd>
+              </div>
+            )}
+            {tracking && (order.status === "shipped" || order.status === "delivered") && (
+              <div className="flex flex-wrap justify-between gap-x-6 gap-y-1 py-4">
+                <dt className="label text-muted">Tracking</dt>
+                <dd className="text-right break-all">{tracking}</dd>
+              </div>
+            )}
+            {order.refunds.map((refund, index) => (
+              <div key={index} className="flex flex-wrap justify-between gap-x-6 gap-y-1 py-4">
+                <dt className="label text-muted">Refund</dt>
+                <dd className="text-right">
+                  {formatPrice(refund.amount)} · {refundText(refund)}
+                </dd>
+              </div>
+            ))}
             {order.paidAt && (
               <div className="flex flex-wrap justify-between gap-x-6 gap-y-1 py-4">
                 <dt className="label text-muted">Payment</dt>

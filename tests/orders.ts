@@ -53,6 +53,9 @@ export async function getPayments(orderReference: string) {
       paystackId: payments.paystackId,
       channel: payments.channel,
       paidAt: payments.paidAt,
+      refundStatus: payments.refundStatus,
+      refundReason: payments.refundReason,
+      refundDetail: payments.refundDetail,
     })
     .from(payments)
     .innerJoin(orders, eq(orders.id, payments.orderId))
@@ -61,7 +64,9 @@ export async function getPayments(orderReference: string) {
 }
 
 export async function setOrderStatus(reference: string, status: (typeof orders.status.enumValues)[number]) {
-  await db.update(orders).set({ status }).where(eq(orders.reference, reference));
+  // A cancelled order needs a cancel reason (orders_cancel_reason_iff_cancelled).
+  const cancelReason = status === "cancelled" ? ("other" as const) : null;
+  await db.update(orders).set({ status, cancelReason }).where(eq(orders.reference, reference));
 }
 
 /** Makes the order look as if it was placed `minutes` ago. */

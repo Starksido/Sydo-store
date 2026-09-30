@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createCategoryAction, updateCategoryAction } from "@/app/admin/categories/actions";
+import { changeOrderStatusAction, recordRefundAction, setTrackingAction } from "@/app/admin/orders/actions";
 import {
   adjustStockAction,
   createProductAction,
@@ -12,10 +13,11 @@ import {
   updateProductAction,
 } from "@/app/admin/products/actions";
 import { db } from "@/db";
-import { categories, products, stockAdjustments } from "@/db/schema";
+import { categories, orderEvents, orders, payments, products, stockAdjustments } from "@/db/schema";
 import { requireAdmin } from "@/lib/session";
 
 import { createCategory, createProduct, createUser, getStock, resetCatalog, setStock } from "../../../tests/fixtures";
+import { createOrder, getOrderRow, setOrderStatus } from "../../../tests/orders";
 
 vi.mock("@/lib/session", () => ({ requireAdmin: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -85,12 +87,21 @@ async function snapshot() {
   const { rows } = await db.execute(sql`
     select (select coalesce(json_agg(p order by p.id), '[]') from products p) as products,
       (select coalesce(json_agg(c order by c.id), '[]') from categories c) as categories,
-      (select coalesce(json_agg(s order by s.id), '[]') from stock_adjustments s) as adjustments
+      (select coalesce(json_agg(s order by s.id), '[]') from stock_adjustments s) as adjustments,
+      (select coalesce(json_agg(o order by o.id), '[]') from orders o) as orders,
+      (select coalesce(json_agg(e order by e.id), '[]') from order_events e) as events,
+      (select coalesce(json_agg(p order by p.id), '[]') from payments p) as payments
   `);
   return rows[0];
 }
 
 const idle = { status: "idle" } as const;
+
+function fields(values: Record<string, string>) {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(values)) form.set(key, value);
+  return form;
+}
 
 describe("admin Server Functions", () => {
   it("refuse customers before reading or writing anything", async () => {
@@ -219,5 +230,115 @@ describe("admin Server Functions", () => {
     });
     await expect(adjustStockAction(999_999, idle, stockForm({}))).rejects.toThrow("NOT_FOUND");
     await expect(adjustStockAction("1", idle, stockForm({}))).rejects.toThrow("NOT_FOUND");
+  });
+  it("refuse customers order changes, tracking and refunds, writing nothing", async () => {
+    const reference = await createOrder(await createUser(), [[await createProduct(5), 1]]);
+    await setOrderStatus(reference, "paid");
+    const { id } = await getOrderRow(reference);
+    const before = await snapshot();
+    signedInAsCustomer();
+
+    await expect(
+      changeOrderStatusAction(id, reference, idle, fields({ expected: "paid", to: "processing" })),
+    ).rejects.toThrow("NOT_FOUND");
+    await expect(setTrackingAction(id, reference, idle, new FormData())).rejects.toThrow("NOT_FOUND");
+    await expect(recordRefundAction(1, reference, "order", idle, new FormData())).rejects.toThrow("NOT_FOUND");
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it("move an order on, cancel it with a reason, and explain refused changes", async () => {
+    const adminId = await createUser();
+    signedInAsAdmin(adminId);
+    const product = await createProduct(5);
+    const reference = await createOrder(await createUser(), [[product, 2]]);
+    const { id } = await getOrderRow(reference);
+    const change = (values: Record<string, string>) => changeOrderStatusAction(id, reference, idle, fields(values));
+
+    // Not paid yet, so it can't be processed.
+    expect(await change({ expected: "pending_payment", to: "processing" })).toMatchObject({
+      status: "error",
+      message: expect.stringContaining("can't be marked processing"),
+    });
+
+    await setOrderStatus(reference, "paid");
+    await expect(change({ expected: "paid", to: "processing", note: "Packing" })).rejects.toThrow(
+      `REDIRECT /admin/orders/${reference}?saved=processing`,
+    );
+    // Someone else already moved it on.
+    expect(await change({ expected: "paid", to: "processing" })).toMatchObject({
+      status: "error",
+      message: expect.stringContaining("it's now processing"),
+    });
+    // Cancelling needs a reason, and keeps what was typed.
+    expect(await change({ expected: "processing", to: "cancelled", note: "Damaged" })).toMatchObject({
+      status: "error",
+      errors: { cancelReason: expect.any(String) },
+      values: expect.objectContaining({ note: "Damaged" }),
+    });
+    await expect(change({ expected: "processing", to: "cancelled", cancelReason: "out_of_stock" })).rejects.toThrow(
+      `REDIRECT /admin/orders/${reference}?saved=cancelled`,
+    );
+
+    expect(await getOrderRow(reference)).toMatchObject({ status: "cancelled" });
+    expect(await getStock(product)).toBe(5);
+    expect(revalidatePath).toHaveBeenCalled();
+    expect(await db.select({ userId: orderEvents.userId, note: orderEvents.note }).from(orderEvents)).toEqual([
+      { userId: adminId, note: "Packing" },
+      { userId: adminId, note: null },
+    ]);
+
+    for (const [orderId, ref] of [
+      [999_999, reference],
+      [id, "SY-bad"],
+      ["1", reference],
+    ] as const) {
+      await expect(
+        changeOrderStatusAction(orderId, ref, idle, fields({ expected: "paid", to: "processing" })),
+      ).rejects.toThrow("NOT_FOUND");
+    }
+    await expect(change({ expected: "paid", to: "lost" })).rejects.toThrow("NOT_FOUND");
+  });
+
+  it("set tracking on shipped orders only, and record refunds once", async () => {
+    signedInAsAdmin(await createUser());
+    const reference = await createOrder(await createUser(), [[await createProduct(5), 1]]);
+    const { id } = await getOrderRow(reference);
+    const tracking = fields({ carrier: "DHL", trackingNumber: "JD01" });
+
+    expect(await setTrackingAction(id, reference, idle, tracking)).toMatchObject({
+      status: "error",
+      message: expect.any(String),
+    });
+    await setOrderStatus(reference, "shipped");
+    await expect(setTrackingAction(id, reference, idle, tracking)).rejects.toThrow(
+      `REDIRECT /admin/orders/${reference}?saved=tracking`,
+    );
+    expect(await db.select({ carrier: orders.shippingCarrier }).from(orders)).toEqual([{ carrier: "DHL" }]);
+
+    const [payment] = await db
+      .insert(payments)
+      .values({
+        orderId: id,
+        reference: `${reference}-X`,
+        amount: 1000,
+        status: "success",
+        refundStatus: "due",
+        refundReason: "duplicate_payment",
+      })
+      .returning({ id: payments.id });
+    const refund = fields({ refundReference: "RF_9", refundedOn: "2026-09-30" });
+    await expect(recordRefundAction(payment.id, reference, "refunds", idle, refund)).rejects.toThrow(
+      "REDIRECT /admin/refunds?saved=1",
+    );
+    expect(await recordRefundAction(payment.id, reference, "order", idle, refund)).toMatchObject({
+      status: "error",
+      message: expect.stringContaining("isn't due"),
+    });
+    expect(
+      await recordRefundAction(payment.id, reference, "order", idle, fields({ refundReference: "", refundedOn: "2099-01-01" })),
+    ).toMatchObject({
+      status: "error",
+      errors: { refundReference: expect.any(String), refundedOn: expect.any(String) },
+    });
   });
 });

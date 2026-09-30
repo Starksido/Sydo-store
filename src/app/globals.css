@@ -411,7 +411,7 @@
   color: var(--color-error);
 }
 
-/* Small status label. Neutral by default; combine with `badge-success` or `badge-error`. */
+/* Small status label. Neutral by default; combine with `badge-strong`, `badge-success` or `badge-error`. */
 @utility badge {
   display: inline-flex;
   align-items: center;
@@ -429,6 +429,12 @@
 @utility badge-success {
   border-color: var(--color-success);
   color: var(--color-success);
+}
+
+/* Needs attention, without meaning success or failure. */
+@utility badge-strong {
+  border-color: var(--color-ink);
+  color: var(--color-ink);
 }
 
 @utility badge-error {

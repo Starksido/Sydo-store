@@ -5,6 +5,7 @@ import { relations, sql } from "drizzle-orm";
 import {
   bigint,
   check,
+  date,
   index,
   integer,
   jsonb,
@@ -179,9 +180,18 @@ export const orderStatus = pgEnum("order_status", [
   "expired",
 ]);
 
+/** Why an admin cancelled an order. Shown to the customer. */
+export const orderCancelReason = pgEnum("order_cancel_reason", [
+  "out_of_stock",
+  "payment_issue",
+  "customer_request",
+  "other",
+]);
+
 /**
  * Placed orders. Created only by `placeOrder` in `@/lib/orders`, in the same statement that takes the
- * stock and clears the ordered cart lines; marked paid or expired only by `@/lib/payments`.
+ * stock and clears the ordered cart lines; marked paid or expired only by `@/lib/payments`; moved
+ * on (processing, shipped, delivered, cancelled) only by `changeOrderStatus` in `@/lib/orders`.
  * `reference` is the public order number used in URLs;
  * `checkout_key` comes from the checkout form so a repeated submit returns the same order.
  * Delivery details are copied onto the order.
@@ -208,6 +218,11 @@ export const orders = pgTable(
     /** Paystack reference of the payment that paid this order. Null until paid. */
     paymentReference: text("payment_reference").unique(),
     paidAt: timestamp("paid_at", { withTimezone: true }),
+    /** Set exactly when the order is cancelled. */
+    cancelReason: orderCancelReason("cancel_reason"),
+    /** Optional, set when shipping; shown to the customer only when filled in. */
+    shippingCarrier: text("shipping_carrier"),
+    trackingNumber: text("tracking_number"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
@@ -217,7 +232,11 @@ export const orders = pgTable(
   (table) => [
     unique("orders_user_checkout_key_unique").on(table.userId, table.checkoutKey),
     index("orders_user_id_created_at_idx").on(table.userId, table.createdAt),
+    index("orders_status_created_at_idx").on(table.status, table.createdAt),
     check("orders_total_nonnegative", sql`${table.total} >= 0`),
+    check("orders_cancel_reason_iff_cancelled", sql`(${table.status} = 'cancelled') = (${table.cancelReason} is not null)`),
+    check("orders_shipping_carrier_length", sql`char_length(${table.shippingCarrier}) <= 100`),
+    check("orders_tracking_number_length", sql`char_length(${table.trackingNumber}) <= 100`),
   ],
 );
 
@@ -251,6 +270,20 @@ export const orderItems = pgTable(
 
 export const paymentStatus = pgEnum("payment_status", ["pending", "success", "failed", "abandoned"]);
 
+/** A successful payment that has to be refunded by hand in the Paystack dashboard. */
+export const refundStatus = pgEnum("refund_status", ["due", "refunded"]);
+
+export const refundReason = pgEnum("refund_reason", [
+  /** An admin cancelled the order this payment paid for. */
+  "order_cancelled",
+  /** The order was already paid by another attempt. */
+  "duplicate_payment",
+  /** The order was cancelled, or expired and sold out, when this payment landed. */
+  "order_unavailable",
+  /** Paystack's record didn't match the order (amount, currency or order). */
+  "mismatch",
+]);
+
 /**
  * One row per Paystack payment attempt, written only by `@/lib/payments`. The row is created before
  * the transaction is initialized, so every reference Paystack can report back is known here.
@@ -274,6 +307,20 @@ export const payments = pgTable(
     /** e.g. "mobile_money" or "card", once verified. */
     channel: text(),
     paidAt: timestamp("paid_at", { withTimezone: true }),
+    /**
+     * Set when money was taken that has to go back: by an admin cancelling a paid order, or by
+     * `confirmPayment` for a payment it can't apply. Refunds are made in the Paystack dashboard and
+     * then recorded here by an admin.
+     */
+    refundStatus: refundStatus("refund_status"),
+    refundReason: refundReason("refund_reason"),
+    /** What the system saw, e.g. the mismatch. */
+    refundDetail: text("refund_detail"),
+    /** Paystack's refund reference, entered by the admin who made the refund. */
+    refundReference: text("refund_reference"),
+    refundedOn: date("refunded_on", { mode: "string" }),
+    refundRecordedBy: text("refund_recorded_by").references(() => user.id, { onDelete: "restrict" }),
+    refundRecordedAt: timestamp("refund_recorded_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
@@ -282,7 +329,39 @@ export const payments = pgTable(
   },
   (table) => [
     index("payments_order_id_created_at_idx").on(table.orderId, table.createdAt),
+    index("payments_refund_status_idx").on(table.refundStatus),
     check("payments_amount_nonnegative", sql`${table.amount} >= 0`),
+    check("payments_refund_reason_iff_status", sql`(${table.refundStatus} is null) = (${table.refundReason} is null)`),
+    check(
+      "payments_refunded_recorded",
+      sql`${table.refundStatus} is distinct from 'refunded' or (${table.refundReference} is not null and ${table.refundedOn} is not null and ${table.refundRecordedBy} is not null and ${table.refundRecordedAt} is not null)`,
+    ),
+    check("payments_refund_reference_length", sql`char_length(${table.refundReference}) <= 100`),
+  ],
+);
+
+/**
+ * One row per order status change: by an admin (`user_id`), or by the system (null) when a payment
+ * lands or the sweep expires the order. Written in the same statement as the change. `note` is
+ * internal and never shown to customers.
+ */
+export const orderEvents = pgTable(
+  "order_events",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    orderId: integer("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "restrict" }),
+    userId: text("user_id").references(() => user.id, { onDelete: "restrict" }),
+    fromStatus: orderStatus("from_status").notNull(),
+    toStatus: orderStatus("to_status").notNull(),
+    note: text(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("order_events_order_id_created_at_idx").on(table.orderId, table.createdAt),
+    check("order_events_status_changes", sql`${table.fromStatus} <> ${table.toStatus}`),
+    check("order_events_note_length", sql`char_length(${table.note}) <= 500`),
   ],
 );
 

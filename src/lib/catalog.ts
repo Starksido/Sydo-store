@@ -64,6 +64,30 @@ export function formatOrderDate(date: Date) {
   return orderDate.format(date);
 }
 
+/** Why an order was cancelled: the admin's choice, and the sentence the customer reads. */
+export const CANCEL_REASONS = {
+  out_of_stock: { label: "Out of stock", customer: "An item in your order is out of stock." },
+  payment_issue: { label: "Payment issue", customer: "There was a problem with the payment." },
+  customer_request: { label: "Customer's request", customer: "Cancelled at your request." },
+  other: { label: "Other", customer: "Please contact Client Services if you have any questions." },
+} as const;
+
+export type CancelReason = keyof typeof CANCEL_REASONS;
+
+const calendarDate = new Intl.DateTimeFormat("en-KE", { dateStyle: "long", timeZone: "UTC" });
+
+/** A date without a time, stored as "2026-10-02", e.g. "2 October 2026". */
+export function formatCalendarDate(date: string) {
+  return calendarDate.format(new Date(`${date}T00:00:00Z`));
+}
+
+/** A refund as customers read it: "Refund pending" or "Refunded on 2 October 2026". */
+export function refundText(refund: { status: "due" | "refunded"; refundedOn: string | null }) {
+  return refund.status === "refunded" && refund.refundedOn
+    ? `Refunded on ${formatCalendarDate(refund.refundedOn)}`
+    : "Refund pending";
+}
+
 export const LOW_STOCK_THRESHOLD = 3;
 
 export type StockState = "in-stock" | "low-stock" | "sold-out";

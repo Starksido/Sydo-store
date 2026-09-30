@@ -177,7 +177,10 @@ describe("confirmPayment", () => {
       expect(await confirmPayment(payment)).toEqual({ outcome: "mismatch", orderReference: reference });
     }
     expect(await getOrderRow(reference)).toMatchObject({ status: "pending_payment", paymentReference: null });
-    expect(await getPayments(reference)).toMatchObject([{ status: "pending" }]);
+    // The money was taken, so it's owed back: recorded once, from the first check.
+    expect(await getPayments(reference)).toMatchObject([
+      { status: "success", refundStatus: "due", refundReason: "mismatch", refundDetail: expect.stringContaining("amount") },
+    ]);
   });
 
   it("ignores references it didn't issue, without asking Paystack", async () => {

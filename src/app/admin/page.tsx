@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { listAdminCategories } from "@/lib/admin/categories";
+import { countOrderWork } from "@/lib/admin/orders";
 import { countAdminProducts, countLowStockProducts } from "@/lib/admin/products";
 import { LOW_STOCK_THRESHOLD } from "@/lib/catalog";
 import { requireAdmin } from "@/lib/session";
@@ -15,13 +16,22 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function AdminOverviewPage() {
   const { user } = await requireAdmin("/admin");
-  const [productCounts, lowStock, categories] = await Promise.all([
+  const [productCounts, lowStock, categories, orderWork] = await Promise.all([
     countAdminProducts(),
     countLowStockProducts(),
     listAdminCategories(),
+    countOrderWork(),
   ]);
 
-  const sections = [
+  const orderSections: Section[] = [
+    {
+      href: "/admin/orders?status=to-fulfil",
+      title: "Orders",
+      stats: [{ label: "To fulfil", value: orderWork.toFulfil }],
+    },
+    { href: "/admin/refunds", title: "Refunds", stats: [{ label: "Due", value: orderWork.refundsDue }] },
+  ];
+  const catalogSections: Section[] = [
     {
       href: "/admin/products",
       title: "Products",
@@ -50,25 +60,34 @@ export default async function AdminOverviewPage() {
         Signed in as <span className="break-all text-ink">{user.email}</span>.
       </p>
 
-      <ul className="mt-10 grid gap-px border bg-line sm:grid-cols-3">
-        {sections.map((section) => (
-          <li key={section.href} className="bg-paper">
-            <Link href={section.href} className="group block p-6">
-              <h2 className="heading-3">
-                <span className="link-quiet group-hover:decoration-current">{section.title}</span>
-              </h2>
-              <dl className="mt-4 flex gap-8">
-                {section.stats.map((stat) => (
-                  <div key={stat.label}>
-                    <dt className="eyebrow text-muted">{stat.label}</dt>
-                    <dd className="mt-1 text-xl tabular-nums">{stat.value}</dd>
-                  </div>
-                ))}
-              </dl>
-            </Link>
-          </li>
-        ))}
-      </ul>
+      <SectionGrid sections={orderSections} className="mt-10 sm:grid-cols-2" />
+      <SectionGrid sections={catalogSections} className="mt-6 sm:grid-cols-3" />
     </section>
+  );
+}
+
+type Section = { href: string; title: string; stats: { label: string; value: number }[] };
+
+function SectionGrid({ sections, className }: { sections: Section[]; className: string }) {
+  return (
+    <ul className={`grid gap-px border bg-line ${className}`}>
+      {sections.map((section) => (
+        <li key={section.href} className="bg-paper">
+          <Link href={section.href} className="group block p-6">
+            <h2 className="heading-3">
+              <span className="link-quiet group-hover:decoration-current">{section.title}</span>
+            </h2>
+            <dl className="mt-4 flex gap-8">
+              {section.stats.map((stat) => (
+                <div key={stat.label}>
+                  <dt className="eyebrow text-muted">{stat.label}</dt>
+                  <dd className="mt-1 text-xl tabular-nums">{stat.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </Link>
+        </li>
+      ))}
+    </ul>
   );
 }
