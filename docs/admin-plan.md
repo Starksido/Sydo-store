@@ -1,6 +1,6 @@
 # Admin side: build plan
 
-Based on [admin-findings.md](admin-findings.md) and the decisions recorded there. Four steps, each ending
+Based on [admin-findings.md](admin-findings.md) and the decisions recorded there. Five steps, each ending
 at a stop: I verify, then you test and commit before the next one starts.
 
 **Every step**
@@ -239,16 +239,136 @@ Keeps the "only stock.ts changes stock" rule. Not `"use server"`.
 
 ---
 
-## Later: the orders slice
+## Step 5: Orders
 
-Outline only; it gets its own detailed plan after step 4.
-- `order_events`: who, from status, to status, note, when.
-- Admin order list and detail, with all payment attempts.
-- Allowed changes: paid → processing → shipped → delivered, and cancel with stock return. Each change is
-  conditional on the expected current status.
-- Record mismatched and needs-refund payments in the database (a problem column or table on `payments`), and
-  give admins a list of them.
-- Index on `orders (status, created_at)`.
+Decisions from your answers (2026-09-30) are built in below.
+
+**Schema** (migration `0010`)
+- New table `order_events`, one row per status change:
+
+| Column | Type | Rules |
+|---|---|---|
+| `id` | integer identity | primary key |
+| `order_id` | integer | not null, FK to orders, `on delete restrict` |
+| `user_id` | text | FK to user, `on delete restrict`; null for changes the system makes |
+| `from_status` | `order_status` | not null |
+| `to_status` | `order_status` | not null, check `<> from_status` |
+| `note` | text | nullable, 500 characters at most; admin-only |
+| `created_at` | timestamptz | |
+
+- Index on `order_events (order_id, created_at)`, and on `orders (status, created_at)` for the admin list.
+- `orders` gets:
+  - `cancel_reason`: new enum `order_cancel_reason` (`out_of_stock`, `payment_issue`, `customer_request`,
+    `other`). Shown to the customer. Check: set exactly when the status is `cancelled`.
+  - `shipping_carrier` and `tracking_number`: text, both optional, 100 characters at most. Shown to the
+    customer only when filled in.
+- `payments` gets refund tracking:
+  - `refund_status`: new enum `refund_status` (`due`, `refunded`), nullable
+  - `refund_reason`: new enum `refund_reason`:
+    - `order_cancelled`: an admin cancelled the paid order
+    - `duplicate_payment`: the order was already paid by another attempt
+    - `order_unavailable`: the order was cancelled or expired and sold out when the payment landed
+    - `mismatch`: Paystack's record didn't match the order (amount, currency or order)
+  - `refund_detail`: text, what the system saw (e.g. the mismatch)
+  - `refund_reference`: text, the Paystack refund reference the admin enters
+  - `refunded_on`: date, entered by the admin
+  - `refund_recorded_by`: FK to user, `on delete restrict`; `refund_recorded_at`: timestamptz
+  - Checks:
+    - `refund_reason` is set exactly when `refund_status` is.
+    - `refunded` requires the reference, the date and who recorded it.
+
+**Allowed changes**
+
+| From | To | Stock | Condition |
+|---|---|---|---|
+| `paid` | `processing` | unchanged | |
+| `processing` | `shipped` | unchanged | optional carrier and tracking number |
+| `shipped` | `delivered` | unchanged | |
+| `pending_payment` | `cancelled` | returned | no payment attempt still `pending` |
+| `paid`, `processing` | `cancelled` | returned | the paying payment becomes refund `due` |
+
+- Forward only. Nothing leaves `delivered` or `cancelled`, and shipped orders can't be cancelled. A return after
+  delivery is a stock adjustment with the "Customer return" reason.
+- Cancelling needs a customer-facing reason from the list, and takes an optional internal note.
+- Carrier and tracking number can be corrected later on shipped and delivered orders. Corrections aren't in the
+  timeline, which only records status changes.
+- Unpaid orders with an open attempt can't be cancelled: the page says the customer may be paying and the order
+  expires by itself after `PAYMENT_WINDOW_MINUTES` if unpaid. `startPayment` locks the order row, so a cancel and
+  a new payment attempt can't interleave.
+
+**`src/lib/orders.ts`**
+- `changeOrderStatus({ orderId, expected, to, cancelReason, note, carrier, trackingNumber, userId })`, one
+  statement:
+  - locks the order row `for update`
+  - applies the change only if the status is still `expected`, the change is allowed, and (for an unpaid cancel)
+    no attempt is pending
+  - for a cancel, returns the stock with `stockIncrementCtes`, like the expiry sweep, and for a paid cancel
+    marks the paying payment refund `due` (`order_cancelled`)
+  - inserts the `order_events` row
+  - returns `{ ok: true }` or `{ ok: false, reason: "stale", current }` / `"payment-open"` / `"not-allowed"` /
+    `"not-found"`; throws on invalid input
+- `setTracking({ orderId, carrier, trackingNumber })` for corrections on shipped and delivered orders.
+- A payment that lands while an admin cancels: both lock the order row, so exactly one wins. If the cancel
+  wins, `confirmPayment` marks the payment refund `due` (`order_unavailable`). If the payment wins, the cancel
+  is refused as stale.
+
+**Payment changes**
+- `confirmPayment` records its problem outcomes on the payment instead of only logging them:
+  - `mismatch`: refund `due` (`mismatch`), with the mismatch in `refund_detail`
+  - `needs-refund`: refund `due` (`duplicate_payment` or `order_unavailable`)
+  - It's called repeatedly, so it never overwrites a refund that's already recorded.
+- `confirmPayment` (paid, and expired → paid) and `expireUnpaidOrders` add an `order_events` row with no user, in
+  the statements they already run.
+
+**Data layer** (`src/lib/admin/orders.ts`, server-only, not `"use server"`)
+- `listAdminOrders({ q, status, refund, page })`
+  - search by reference, customer name, email or phone
+  - filter by status, and by "has a refund due"
+- `getAdminOrder(reference)`: items, delivery, customer, tracking, every payment attempt with its refund
+  fields, and the events.
+- `listRefundsDue()`: payments with refund `due`, oldest first.
+- `recordRefund({ paymentId, reference, refundedOn, userId })`: conditional on the refund still being `due`.
+- `countOrdersToFulfil()` (paid + processing) and `countRefundsDue()` for the overview.
+
+**Server Functions** (`src/app/admin/orders/actions.ts`)
+- `changeOrderStatusAction`, `setTrackingAction` and `recordRefundAction`: `requireAdmin` first, parse, call,
+  then redirect with `?saved=`, like steps 3 and 4. A stale result shows the current status.
+
+**Pages**
+- `/admin/orders`: reference, date, customer, total, status badge, and a "Refund due" badge. Search, status and
+  refund filters, Newer/Older paging.
+- `/admin/orders/[reference]`:
+  - items and totals (reusing `OrderSummary`), delivery details, customer name and email
+  - the next step as one button behind the two-step confirm; "Mark as shipped" has the two optional fields
+  - Cancel, with the reason list and an internal note, only where allowed
+  - tracking, editable once shipped
+  - every payment attempt: status, channel, amount, refund status, and a "Record refund" form (Paystack refund
+    reference and date) on refunds due
+  - the timeline from `order_events`, with internal notes
+- `/admin/refunds`: "Needs refund", each linking to its order, oldest first.
+- Nav gets Orders and Refunds. The overview gets "to fulfil" and "refunds due" counts.
+
+**Customers** (`/orders/[reference]` and `/account/orders/[reference]`)
+- The new statuses show through the existing labels.
+- Cancelled: the reason as a sentence (e.g. "Cancelled: an item is out of stock").
+- Refunds on the order's payments: "Refund pending" or "Refunded on 2 October 2026".
+- Shipped or delivered: carrier and tracking number, each only if filled in.
+- Internal notes and the timeline stay admin-only.
+
+**Tests**
+- Each allowed change, each refused one (stale, payment open, not allowed, unknown order) and invalid input.
+- Cancel returns the stock exactly once, including racing the expiry sweep, `confirmPayment` and
+  `startPayment`.
+- Cancelling a paid order marks its payment refund `due`; recording the refund, and recording it twice.
+- `confirmPayment` records mismatches and refunds once and never overwrites a recorded refund.
+- Events recorded for admin, payment and expiry changes, with the right user or none.
+- Tracking set when shipping and corrected later; the customer page shows only what's filled in.
+- Admin-only enforcement on every action.
+- `resetCatalog` also truncates `order_events`.
+
+**Not included**
+- Refunds through Paystack's API, emails to customers, editing an order's items or address, partial
+  cancellations or refunds.
 
 ## Questions before step 1
 
