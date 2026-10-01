@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { ChangePasswordForm } from "@/components/auth/change-password-form";
 import { SignOutButton } from "@/components/auth/sign-out-button";
 import { orderStatusText } from "@/components/orders/order-status";
 import { formatOrderDate, formatPrice } from "@/lib/catalog";
@@ -85,7 +86,16 @@ export default async function AccountPage({ searchParams }: PageProps<"/account"
         )}
       </div>
 
-      <div className="mt-10 flex flex-wrap gap-4">
+      <div className="mt-16" aria-labelledby="password-heading" role="region">
+        <h2 id="password-heading" className="heading-2">
+          Password
+        </h2>
+        <div className="mt-6">
+          <ChangePasswordForm />
+        </div>
+      </div>
+
+      <div className="mt-16 flex flex-wrap gap-4">
         {user.role === "admin" && (
           <Link href="/admin" className="btn btn-primary">
             Admin

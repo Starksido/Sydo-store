@@ -59,10 +59,12 @@ export async function setStock(productId: number, stock: number) {
   await db.update(products).set({ stock }).where(eq(products.id, productId));
 }
 
-/** Creates a user and returns its id. */
+/** Creates a user with a confirmed email (as every user who can sign in has) and returns its id. */
 export async function createUser() {
   const id = randomUUID();
-  await db.insert(user).values({ id, name: `Test user ${id.slice(0, 8)}`, email: `${id}@example.com` });
+  await db
+    .insert(user)
+    .values({ id, name: `Test user ${id.slice(0, 8)}`, email: `${id}@example.com`, emailVerified: true });
   return id;
 }
 

@@ -6,6 +6,7 @@ import { startPayment } from "@/lib/payments";
 import { createProduct, createUser, getStock, resetCatalog } from "../../../../../tests/fixtures";
 import { createOrder, getOrderRow, getPayments } from "../../../../../tests/orders";
 import { mockPaystack, signPaystack } from "../../../../../tests/paystack-mock";
+import { mockResend } from "../../../../../tests/resend-mock";
 import { POST } from "./route";
 
 let paystack: ReturnType<typeof mockPaystack>;
@@ -18,6 +19,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -66,6 +68,25 @@ describe("POST /api/webhooks/paystack", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ outcome: "paid" });
     expect(await getOrderRow(reference)).toMatchObject({ status: "paid", paymentReference: payment });
+  });
+
+  it("emails the customer an order confirmation once, however often the event arrives", async () => {
+    const resend = mockResend();
+    const { reference, payment } = await pendingPayment();
+    paystack.settle(payment);
+
+    await deliver(chargeSuccess(payment));
+    await deliver(chargeSuccess(payment));
+
+    const [mail] = await resend.waitFor(1);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(resend.sent).toHaveLength(1);
+    expect(mail).toMatchObject({
+      to: [expect.stringMatching(/@example.com$/)],
+      subject: `Order ${reference} confirmed`,
+      idempotencyKey: `order-paid/${reference}`,
+    });
+    expect(mail.text).toContain(`http://localhost:3000/account/orders/${reference}`);
   });
 
   it("is safe to receive the same event twice", async () => {

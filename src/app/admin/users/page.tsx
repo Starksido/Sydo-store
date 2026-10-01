@@ -22,6 +22,7 @@ const RESULTS: Record<string, { tone: "saved" | "refused"; message: string }> = 
   removed: { tone: "saved", message: "Admin role removed, and they've been signed out everywhere." },
   unchanged: { tone: "saved", message: "Nothing changed: they already had that role." },
   self: { tone: "refused", message: "You can't remove your own admin role. Another admin can." },
+  unverified: { tone: "refused", message: "They haven't confirmed their email address yet, so they can't be made an admin." },
   "last-admin": { tone: "refused", message: "That's the only admin, so the role can't be removed. Add another admin first." },
 };
 
@@ -57,8 +58,8 @@ export default async function AdminUsersPage({ searchParams }: PageProps<"/admin
         Users
       </h1>
       <p className="mt-3 max-w-2xl text-muted">
-        Admins can manage products, stock, orders, refunds and other admins. Anyone can sign up with any email
-        address, so make sure an account is the right person&apos;s before making it an admin.
+        Admins can manage products, stock, orders, refunds and other admins. Only users who have confirmed their
+        email address can be made admins.
       </p>
 
       {result && (
@@ -147,6 +148,8 @@ export default async function AdminUsersPage({ searchParams }: PageProps<"/admin
                             confirmLabel="Yes, remove"
                             warning={`${user.email} will lose access to the admin and be signed out everywhere.`}
                           />
+                        ) : !user.emailVerified ? (
+                          <span className="text-xs text-muted">Email not confirmed</span>
                         ) : (
                           <ConfirmButton
                             action={setUserRoleAction.bind(null, user.id, "admin")}

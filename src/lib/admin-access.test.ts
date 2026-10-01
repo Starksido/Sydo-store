@@ -40,10 +40,16 @@ function post(path: string, body: Record<string, unknown>, cookie?: string) {
   );
 }
 
-/** Signs up a new user and returns its id, stored role and session cookie. */
+/**
+ * Signs up a new user, confirms its email (sign-in needs that) and signs in. Returns its id, stored
+ * role and session cookie.
+ */
 async function signUp(extra: Record<string, unknown> = {}) {
   const email = `${randomUUID()}@example.com`;
-  const response = await post("/sign-up/email", { name: "Test user", email, password: "correct-horse-battery", ...extra });
+  const password = "correct-horse-battery";
+  expect((await post("/sign-up/email", { name: "Test user", email, password, ...extra })).status).toBe(200);
+  await db.update(user).set({ emailVerified: true }).where(eq(user.email, email));
+  const response = await post("/sign-in/email", { email, password });
   expect(response.status).toBe(200);
   const cookie = response.headers
     .getSetCookie()

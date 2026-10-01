@@ -20,6 +20,7 @@ import { requireAdmin } from "@/lib/session";
 
 import { createCategory, createProduct, createUser, getStock, resetCatalog, setStock } from "../../../tests/fixtures";
 import { createOrder, getOrderRow, setOrderStatus } from "../../../tests/orders";
+import { mockResend } from "../../../tests/resend-mock";
 
 vi.mock("@/lib/session", () => ({ requireAdmin: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -38,6 +39,8 @@ beforeEach(resetCatalog);
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 function signedInAsAdmin(id = "admin") {
@@ -216,6 +219,8 @@ describe("admin Server Functions", () => {
     await expect(setUserRoleAction(userId, "admin")).rejects.toThrow(`${back}unchanged`);
     await expect(setUserRoleAction(userId, "user")).rejects.toThrow(`${back}removed`);
     await expect(setUserRoleAction(adminId, "user")).rejects.toThrow("result=self");
+    await db.update(user).set({ emailVerified: false }).where(eq(user.id, userId));
+    await expect(setUserRoleAction(userId, "admin")).rejects.toThrow("result=unverified");
     expect(await db.select({ toRole: roleChanges.toRole }).from(roleChanges)).toEqual([
       { toRole: "admin" },
       { toRole: "user" },
@@ -354,6 +359,50 @@ describe("admin Server Functions", () => {
       ).rejects.toThrow("NOT_FOUND");
     }
     await expect(change({ expected: "paid", to: "lost" })).rejects.toThrow("NOT_FOUND");
+  });
+
+  it("email the customer when an order ships or is cancelled, and when a refund is recorded", async () => {
+    const resend = mockResend();
+    signedInAsAdmin(await createUser());
+    const customer = await createUser();
+    const [{ email }] = await db.select({ email: user.email }).from(user).where(eq(user.id, customer));
+    const shipped = await createOrder(customer, [[await createProduct(5), 1]]);
+    const cancelled = await createOrder(customer, [[await createProduct(5), 1]]);
+    const [s, c] = [await getOrderRow(shipped), await getOrderRow(cancelled)];
+    const change = (id: number, reference: string, values: Record<string, string>) =>
+      expect(changeOrderStatusAction(id, reference, idle, fields(values))).rejects.toThrow("REDIRECT");
+
+    await setOrderStatus(shipped, "paid");
+    await change(s.id, shipped, { expected: "paid", to: "processing" });
+    await change(s.id, shipped, { expected: "processing", to: "shipped", carrier: "G4S", trackingNumber: "G4S-1" });
+    await change(c.id, cancelled, { expected: "pending_payment", to: "cancelled", cancelReason: "customer_request" });
+    const [payment] = await db
+      .insert(payments)
+      .values({
+        orderId: c.id,
+        reference: `${cancelled}-X`,
+        amount: 1000,
+        status: "success",
+        refundStatus: "due",
+        refundReason: "duplicate_payment",
+      })
+      .returning({ id: payments.id });
+    await expect(
+      recordRefundAction(payment.id, cancelled, "order", idle, fields({ refundReference: "RF_1", refundedOn: "2026-09-30" })),
+    ).rejects.toThrow("REDIRECT");
+
+    await resend.waitFor(3);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(resend.sent.map((mail) => [mail.to[0], mail.subject, mail.idempotencyKey])).toEqual(
+      expect.arrayContaining([
+        [email, `Order ${shipped} has shipped`, `order-shipped/${shipped}`],
+        [email, `Order ${cancelled} cancelled`, `order-cancelled/${cancelled}`],
+        [email, `Refund for order ${cancelled}`, `refund-${payment.id}/${cancelled}`],
+      ]),
+    );
+    // Nothing for "processing".
+    expect(resend.sent).toHaveLength(3);
+    expect(resend.sent.find((mail) => mail.subject.includes("shipped"))?.text).toContain("G4S, tracking number G4S-1");
   });
 
   it("set tracking on shipped orders only, and record refunds once", async () => {

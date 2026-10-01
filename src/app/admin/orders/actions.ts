@@ -13,7 +13,9 @@ import {
 } from "@/lib/admin/order-input";
 import type { FieldErrors } from "@/lib/admin/product-input";
 import { recordRefund } from "@/lib/admin/orders";
+import { inBackground } from "@/lib/background";
 import { orderStatusLabel } from "@/lib/catalog";
+import { notifyOrderStatus, notifyRefundRecorded } from "@/lib/email/order-emails";
 import { changeOrderStatus, PAYMENT_WINDOW_MINUTES, setTracking } from "@/lib/orders";
 import { requireAdmin } from "@/lib/session";
 
@@ -58,6 +60,7 @@ export async function changeOrderStatusAction(
     return { status: "error", values: form.values, errors: {}, message };
   }
 
+  inBackground(notifyOrderStatus(reference, to));
   // A cancel puts stock back on sale.
   if (to === "cancelled") revalidateStorefront();
   redirect(orderUrl(reference, to));
@@ -110,5 +113,6 @@ export async function recordRefundAction(
       message: "This refund isn't due any more; someone may have recorded it already. Reload the page.",
     };
   }
+  inBackground(notifyRefundRecorded(paymentId));
   redirect(from === "refunds" ? "/admin/refunds?saved=1" : orderUrl(reference, "refund"));
 }

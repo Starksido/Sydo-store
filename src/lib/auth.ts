@@ -2,8 +2,15 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { nextCookies } from "better-auth/next-js";
 
+import { eq } from "drizzle-orm";
+
 import { db } from "@/db";
+import { user as users } from "@/db/schema";
+import { appUrl } from "@/lib/app-url";
 import { authLogger } from "@/lib/auth-logger";
+import { inBackground } from "@/lib/background";
+import { trySendEmail } from "@/lib/email/send";
+import { existingAccountContent, resetPasswordContent, verifyEmailContent } from "@/lib/email/templates";
 
 const MIN_SECRET_BYTES = 32;
 const GENERATE_HINT = "Generate one with `npx auth secret` or `openssl rand -base64 32`.";
@@ -46,7 +53,37 @@ function readAuthSecret() {
 export const auth = betterAuth({
   secret: readAuthSecret(),
   database: drizzleAdapter(db, { provider: "pg" }),
-  emailAndPassword: { enabled: true },
+  emailAndPassword: {
+    enabled: true,
+    // No session until the email is confirmed. Sign-up then answers the same whether or not the
+    // email already has an account (the owner gets an email instead), so it can't be used to
+    // find out who has one.
+    requireEmailVerification: true,
+    sendResetPassword: ({ user, url }) =>
+      trySendEmail("password-reset", { to: user.email, ...resetPasswordContent({ name: user.name, url }) }),
+    // The reset link proved they own the address, and signs them out everywhere else.
+    onPasswordReset: async ({ user }) => {
+      await db.update(users).set({ emailVerified: true }).where(eq(users.id, user.id));
+    },
+    revokeSessionsOnPasswordReset: true,
+    onExistingUserSignUp: ({ user }) =>
+      trySendEmail("existing-account", {
+        to: user.email,
+        ...existingAccountContent({
+          name: user.name,
+          signInUrl: `${appUrl()}/sign-in`,
+          resetUrl: `${appUrl()}/forgot-password`,
+        }),
+      }),
+  },
+  emailVerification: {
+    sendOnSignUp: true,
+    // A sign-in with the right password but an unconfirmed email sends a fresh link.
+    sendOnSignIn: true,
+    autoSignInAfterVerification: true,
+    sendVerificationEmail: ({ user, url }) =>
+      trySendEmail("verify-email", { to: user.email, ...verifyEmailContent({ name: user.name, url }) }),
+  },
   user: {
     additionalFields: {
       // "user" or "admin". `input: false`: sign-up always stores the default and update-user refuses
@@ -56,6 +93,9 @@ export const auth = betterAuth({
   },
   // Logs the cause of failed database queries, not just "Failed query".
   logger: authLogger,
+  // Emails go out after the response, so answers don't take longer when an email is sent (which
+  // would show whether an address has an account).
+  advanced: { backgroundTasks: { handler: inBackground } },
   // Lets `auth.api.*` calls from Server Actions set cookies. Must stay the last plugin.
   plugins: [nextCookies()],
 });

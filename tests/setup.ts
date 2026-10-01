@@ -12,3 +12,6 @@ process.env.CRON_SECRET = "test-cron-secret";
 // the checks in src/lib/auth.ts.
 process.env.BETTER_AUTH_SECRET = "58bcc4abea633cd39800a4c719886e9c8e3793987eec6493bfe9d6243b867aa9";
 delete process.env.BETTER_AUTH_SECRETS;
+// No email leaves a test: without a key `sendEmail` sends nothing. tests/resend-mock.ts sets fake ones.
+delete process.env.RESEND_API_KEY;
+delete process.env.EMAIL_FROM;

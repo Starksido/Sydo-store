@@ -121,6 +121,16 @@ describe("setUserRole", () => {
     expect(await db.select().from(roleChanges)).toHaveLength(1);
   });
 
+  it("refuses making a user whose email isn't confirmed an admin", async () => {
+    const actorId = await createAdmin();
+    const userId = await createUser();
+    await db.update(user).set({ emailVerified: false }).where(eq(user.id, userId));
+
+    expect(await setUserRole({ actorId, userId, role: "admin" })).toMatchObject({ ok: false, reason: "unverified" });
+    expect(await roleOf(userId)).toBe("user");
+    expect(await db.select().from(roleChanges)).toEqual([]);
+  });
+
   it("reports an unknown user, and throws on an invalid role", async () => {
     const actorId = await createAdmin();
     expect(await setUserRole({ actorId, userId: "nobody", role: "admin" })).toEqual({ ok: false, reason: "not-found" });

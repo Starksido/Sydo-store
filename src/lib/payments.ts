@@ -8,6 +8,8 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { orders, payments } from "@/db/schema";
+import { appUrl } from "@/lib/app-url";
+import { notifyOrderPaid } from "@/lib/email/order-emails";
 import { PAYMENT_WINDOW_MINUTES, randomCode } from "@/lib/orders";
 import { initializeTransaction, verifyTransaction } from "@/lib/paystack";
 import { stockDecrementCtes, stockIncrementCtes } from "@/lib/stock";
@@ -26,13 +28,6 @@ export const PAYMENT_HOLD_MINUTES = 30;
 export const MAX_PAYMENT_ATTEMPTS = 10;
 
 const PAID_STATUSES = new Set(["paid", "processing", "shipped", "delivered"]);
-
-/** The app's public base URL, from configuration rather than the request's Host header. */
-function appUrl() {
-  const base = process.env.BETTER_AUTH_URL?.trim();
-  if (!base) throw new Error("BETTER_AUTH_URL is not set.");
-  return base.replace(/\/+$/, "");
-}
 
 export type StartPaymentResult =
   | { ok: true; authorizationUrl: string }
@@ -277,8 +272,10 @@ export async function expireUnpaidOrders({ limit = 100 }: { limit?: number } = {
   const checked: string[] = [];
   for (const { reference } of open) {
     try {
-      await confirmPayment(reference);
+      const { outcome, orderReference } = await confirmPayment(reference);
       checked.push(reference);
+      // Already in the background (the cron route, or after a checkout), so it can wait for this.
+      if (outcome === "paid" && orderReference) await notifyOrderPaid(orderReference);
     } catch (error) {
       console.error(`[payments] could not check ${reference} before expiry`, error);
     }

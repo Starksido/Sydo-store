@@ -85,6 +85,13 @@
       "when": 1790790999807,
       "tag": "0011_far_tyrannus",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790793558157,
+      "tag": "0012_confirm_existing_emails",
+      "breakpoints": true
     }
   ]
 }

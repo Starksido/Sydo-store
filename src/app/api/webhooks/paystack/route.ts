@@ -1,3 +1,5 @@
+import { inBackground } from "@/lib/background";
+import { notifyOrderPaid } from "@/lib/email/order-emails";
 import { confirmPayment } from "@/lib/payments";
 import { isValidSignature } from "@/lib/paystack";
 
@@ -28,7 +30,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { outcome } = await confirmPayment(reference);
+    const { outcome, orderReference } = await confirmPayment(reference);
+    if (outcome === "paid" && orderReference) inBackground(notifyOrderPaid(orderReference));
     return Response.json({ outcome });
   } catch (error) {
     console.error(`[paystack webhook] could not process ${reference}`, error);

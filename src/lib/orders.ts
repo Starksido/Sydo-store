@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import { and, asc, desc, eq, isNotNull, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { orderCancelReason, orderItems, orders, orderStatus, payments } from "@/db/schema";
+import { orderCancelReason, orderItems, orders, orderStatus, payments, user } from "@/db/schema";
 import type { Delivery } from "@/lib/delivery";
 import { pgError } from "@/lib/pg-error";
 import { stockDecrementCtes, stockIncrementCtes } from "@/lib/stock";
@@ -227,6 +227,39 @@ export async function getOrderForUser(userId: string, reference: string) {
     payment: payment ?? null,
     refunds: refunds.map((refund) => ({ ...refund, status: refund.status! })),
   };
+}
+
+/**
+ * What the order emails need: the order, its items and its customer's name and email, and whether
+ * the payment that paid for it has a refund due. For system use (emails), not scoped to a user.
+ */
+export async function getOrderForEmail(reference: string) {
+  const [order] = await db
+    .select({ order: orders, customer: { name: user.name, email: user.email } })
+    .from(orders)
+    .innerJoin(user, eq(user.id, orders.userId))
+    .where(eq(orders.reference, reference));
+  if (!order) return undefined;
+  const [items, [refund]] = await Promise.all([
+    db.select().from(orderItems).where(eq(orderItems.orderId, order.order.id)).orderBy(asc(orderItems.id)),
+    order.order.paymentReference
+      ? db
+          .select({ status: payments.refundStatus })
+          .from(payments)
+          .where(eq(payments.reference, order.order.paymentReference))
+      : [],
+  ]);
+  return { ...order.order, customer: order.customer, items, refundDue: refund?.status === "due" };
+}
+
+/** A payment's amount and recorded refund date, with its order's reference, for the refund email. */
+export async function getRefundForEmail(paymentId: number) {
+  const [row] = await db
+    .select({ amount: payments.amount, refundedOn: payments.refundedOn, orderReference: orders.reference })
+    .from(payments)
+    .innerJoin(orders, eq(orders.id, payments.orderId))
+    .where(and(eq(payments.id, paymentId), eq(payments.refundStatus, "refunded")));
+  return row?.refundedOn ? { ...row, refundedOn: row.refundedOn } : undefined;
 }
 
 export const ORDERS_PAGE_SIZE = 10;

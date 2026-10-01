@@ -70,15 +70,17 @@ export async function listRoleChanges(limit = 10) {
 export type SetRoleResult =
   | { ok: true; changed: boolean; email: string }
   | { ok: false; reason: "not-found" }
-  | { ok: false; reason: "self" | "last-admin"; email: string };
+  | { ok: false; reason: "self" | "last-admin" | "unverified"; email: string };
 
 type SetRoleRow = { email: string | null; current: string | null; admins: number; changed: number };
 
 /**
  * Makes `userId` an admin or a customer and records it in `role_changes`, in one statement. It
  * locks every admin row and the target in id order, so two admins removing each other at once
- * can't leave the store with none. Admins can't remove their own role, or the last admin's.
- * Removing a role also deletes that user's sessions, signing them out everywhere.
+ * can't leave the store with none. Admins can't remove their own role, or the last admin's, and
+ * only users who confirmed their email can be made admins (so an address someone signed up with
+ * but doesn't own can't be). Removing a role also deletes that user's sessions, signing them out
+ * everywhere.
  */
 export async function setUserRole({
   actorId,
@@ -93,21 +95,22 @@ export async function setUserRole({
 
   const { rows } = await db.execute<SetRoleRow>(sql`
     with locked as (
-      select id, email, role from "user"
+      select id, email, role, email_verified from "user"
       where role = 'admin' or id = ${userId}
       order by id
       for update
     ),
     target as (
-      select id, email, role from locked where id = ${userId}
+      select id, email, role, email_verified from locked where id = ${userId}
     ),
     upd as (
       update "user" u
       set role = ${role}, updated_at = now()
       from target t
       where u.id = t.id and t.role <> ${role}
-        and (${role} = 'admin'
-          or (u.id <> ${actorId} and (select count(*) from locked where role = 'admin') > 1))
+        and ((${role} = 'admin' and t.email_verified)
+          or (${role} = 'user' and u.id <> ${actorId}
+            and (select count(*) from locked where role = 'admin') > 1))
       returning u.id, t.role as from_role
     ),
     logged as (
@@ -128,6 +131,7 @@ export async function setUserRole({
   const { email } = row;
   if (Number(row.changed) > 0) return { ok: true, changed: true, email };
   if (row.current === role) return { ok: true, changed: false, email };
+  if (role === "admin") return { ok: false, reason: "unverified", email };
   if (userId === actorId) return { ok: false, reason: "self", email };
   return { ok: false, reason: "last-admin", email };
 }

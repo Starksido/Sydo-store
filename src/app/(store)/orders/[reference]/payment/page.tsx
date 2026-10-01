@@ -3,6 +3,8 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
 import { OrderDetail } from "@/components/orders/order-detail";
+import { inBackground } from "@/lib/background";
+import { notifyOrderPaid } from "@/lib/email/order-emails";
 import { getOrderForUser } from "@/lib/orders";
 import { confirmPayment, getPaymentForUser, type ConfirmPaymentOutcome } from "@/lib/payments";
 import { requireSession } from "@/lib/session";
@@ -81,7 +83,9 @@ export default async function PaymentCallbackPage({ params, searchParams }: Page
 
   let outcome: ConfirmPaymentOutcome | "error";
   try {
-    ({ outcome } = await confirmPayment(paymentReference));
+    let orderReference: string | undefined;
+    ({ outcome, orderReference } = await confirmPayment(paymentReference));
+    if (outcome === "paid" && orderReference) inBackground(notifyOrderPaid(orderReference));
   } catch (error) {
     console.error(`[payments] could not confirm ${paymentReference} on return from Paystack`, error);
     outcome = "error";
