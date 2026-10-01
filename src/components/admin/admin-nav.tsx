@@ -11,6 +11,7 @@ const sections = [
   { label: "Stock", href: "/admin/stock" },
   { label: "Orders", href: "/admin/orders" },
   { label: "Refunds", href: "/admin/refunds" },
+  { label: "Reviews", href: "/admin/reviews" },
   { label: "Users", href: "/admin/users" },
 ];
 

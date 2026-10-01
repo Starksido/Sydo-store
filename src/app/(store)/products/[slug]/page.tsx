@@ -8,8 +8,11 @@ import { ProductPurchase } from "@/components/product/product-purchase";
 import { StockStatus } from "@/components/product/stock-status";
 import { WishlistButton } from "@/components/product/wishlist-button";
 import { ProductGrid } from "@/components/product-grid";
+import { ProductReviews } from "@/components/reviews/product-reviews";
+import { Stars } from "@/components/reviews/stars";
 import { categoryHref, formatPrice } from "@/lib/catalog";
 import { getProductBySlug, getProductSlugs, getRelatedProducts } from "@/lib/products";
+import { getReviewSummary, listReviews } from "@/lib/reviews";
 
 // Regenerate at most once a minute so stock and price changes show up without a rebuild.
 export const revalidate = 60;
@@ -40,7 +43,11 @@ export default async function ProductPage({ params }: PageProps<"/products/[slug
   const images = [product.image, product.altImage, ...product.gallery].filter(
     (src): src is string => Boolean(src),
   );
-  const related = await getRelatedProducts(product);
+  const [related, summary, firstReviews] = await Promise.all([
+    getRelatedProducts(product),
+    getReviewSummary(product.id),
+    listReviews(product.id),
+  ]);
 
   return (
     <>
@@ -71,6 +78,14 @@ export default async function ProductPage({ params }: PageProps<"/products/[slug
               {product.badge && <p className="eyebrow mt-6">{product.badge}</p>}
               <h1 className={`heading-2 ${product.badge ? "mt-2" : "mt-6"}`}>{product.name}</h1>
               <p className="mt-3 text-md">{formatPrice(product.price)}</p>
+              {summary.average !== null && (
+                <a href="#reviews-heading" className="link-quiet mt-2 inline-flex items-center gap-2 text-sm">
+                  <Stars rating={summary.average} />
+                  <span className="text-muted">
+                    {summary.count} {summary.count === 1 ? "review" : "reviews"}
+                  </span>
+                </a>
+              )}
 
               <div className="mt-5 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
                 <StockStatus stock={product.stock} />
@@ -107,6 +122,14 @@ export default async function ProductPage({ params }: PageProps<"/products/[slug
           </div>
         </div>
       </article>
+
+      <ProductReviews
+        productId={product.id}
+        slug={product.slug}
+        summary={summary}
+        reviews={firstReviews.reviews}
+        hasMore={firstReviews.hasMore}
+      />
 
       <section aria-labelledby="related-heading" className="section container-page border-t">
         <div className="mb-8 flex items-end justify-between gap-6 md:mb-12">

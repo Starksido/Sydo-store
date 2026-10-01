@@ -222,6 +222,44 @@ export const wishlistItems = pgTable(
   ],
 );
 
+/**
+ * Product reviews, one per user and product, written only by `saveReview` (`@/lib/reviews`) and only
+ * by a user with a delivered order of the product. Published straight away; admins can hide one
+ * (`hidden_at`), which leaves it out of the product page and its average.
+ */
+export const reviews = pgTable(
+  "reviews",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    productId: integer("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    rating: integer().notNull(),
+    title: text().notNull(),
+    /** Empty for a rating with only a title. */
+    body: text().notNull().default(""),
+    hiddenAt: timestamp("hidden_at", { withTimezone: true }),
+    /** The admin who hid it. */
+    hiddenBy: text("hidden_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    unique("reviews_product_user_unique").on(table.productId, table.userId),
+    index("reviews_product_id_created_at_idx").on(table.productId, table.createdAt),
+    index("reviews_created_at_idx").on(table.createdAt),
+    check("reviews_rating_range", sql`${table.rating} between 1 and 5`),
+    check("reviews_title_length", sql`char_length(${table.title}) between 1 and 120`),
+    check("reviews_body_length", sql`char_length(${table.body}) <= 2000`),
+  ],
+);
+
 export const orderStatus = pgEnum("order_status", [
   "pending_payment",
   "paid",
