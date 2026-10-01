@@ -203,6 +203,25 @@ export const cartItems = pgTable(
   ],
 );
 
+/** Products a signed-in user saved for later. Gone with the user or the product. */
+export const wishlistItems = pgTable(
+  "wishlist_items",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    productId: integer("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique("wishlist_items_user_product_unique").on(table.userId, table.productId),
+    index("wishlist_items_product_id_idx").on(table.productId),
+  ],
+);
+
 export const orderStatus = pgEnum("order_status", [
   "pending_payment",
   "paid",

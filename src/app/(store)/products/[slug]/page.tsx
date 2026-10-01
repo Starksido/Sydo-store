@@ -6,6 +6,7 @@ import { Disclosure } from "@/components/disclosure";
 import { ProductGallery } from "@/components/product/product-gallery";
 import { ProductPurchase } from "@/components/product/product-purchase";
 import { StockStatus } from "@/components/product/stock-status";
+import { WishlistButton } from "@/components/product/wishlist-button";
 import { ProductGrid } from "@/components/product-grid";
 import { categoryHref, formatPrice } from "@/lib/catalog";
 import { getProductBySlug, getProductSlugs, getRelatedProducts } from "@/lib/products";
@@ -77,6 +78,10 @@ export default async function ProductPage({ params }: PageProps<"/products/[slug
               </div>
 
               <ProductPurchase stock={product.stock} variants={product.variants} />
+
+              <div className="mt-4">
+                <WishlistButton productId={product.id} slug={product.slug} />
+              </div>
 
               <p className="mt-10 text-muted">{product.description}</p>
 

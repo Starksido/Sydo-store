@@ -78,3 +78,12 @@ export function ArrowRightIcon(props: IconProps) {
     </Icon>
   );
 }
+
+/** Outline heart; pass `fill="currentColor"` for a filled (saved) one. */
+export function HeartIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M12 20s-7.5-4.6-7.5-10.1A4.4 4.4 0 0 1 12 7.2a4.4 4.4 0 0 1 7.5 2.7C19.5 15.4 12 20 12 20Z" />
+    </Icon>
+  );
+}

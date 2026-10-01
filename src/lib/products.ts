@@ -1,6 +1,6 @@
 // Product and category queries for the storefront. Server-only: this module imports the database
 // client. Archived products are left out everywhere, as if they didn't exist.
-import { and, asc, desc, eq, isNotNull, isNull, ne, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, sql, type SQL } from "drizzle-orm";
 import { cache } from "react";
 
 import { db } from "@/db";
@@ -91,6 +91,17 @@ export const getProductBySlug = cache(async (slug: string) => {
   });
   return row ? toProduct(row) : undefined;
 });
+
+/** Products on sale with these ids, in the order given (missing or archived ones are left out). */
+export async function getProductsByIds(ids: number[]) {
+  if (ids.length === 0) return [];
+  const rows = await db.query.products.findMany({
+    where: and(inArray(products.id, ids), onSale),
+    with: withCategory,
+  });
+  const byId = new Map(rows.map((row) => [row.id, toProduct(row)]));
+  return ids.flatMap((id) => byId.get(id) ?? []);
+}
 
 export async function getNewArrivals(limit = 8) {
   const rows = await db.query.products.findMany({

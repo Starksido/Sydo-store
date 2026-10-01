@@ -36,6 +36,14 @@ export default async function AccountPage({ searchParams }: PageProps<"/account"
           <dt className="label text-muted">Email</dt>
           <dd className="break-all">{user.email}</dd>
         </div>
+        <div className="flex flex-wrap justify-between gap-x-6 gap-y-1 py-4">
+          <dt className="label text-muted">Wishlist</dt>
+          <dd>
+            <Link href="/account/wishlist" className="link">
+              View saved pieces
+            </Link>
+          </dd>
+        </div>
       </dl>
 
       <div className="mt-16" aria-labelledby="orders-heading" role="region">
