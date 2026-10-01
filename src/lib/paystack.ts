@@ -1,15 +1,34 @@
 // Paystack API client. Server-only: it uses the secret key. No database access; see @/lib/payments.
-// Test mode only for now: the key must be a `sk_test_` key, so going live is a deliberate change.
+// Test mode by default. Going live is a deliberate change: a live key (`sk_live_`) is refused unless
+// PAYSTACK_MODE=live, in a production build, on an https site; tests and development never take one.
 import { createHmac, timingSafeEqual } from "node:crypto";
+
+import { appUrl } from "@/lib/app-url";
 
 const API = "https://api.paystack.co";
 
-/** Read on use, not at import, so building the app doesn't need the key. */
+/**
+ * Read on use, not at import, so building the app doesn't need the key. With PAYSTACK_MODE=live the
+ * key must be a live one (so a live site can't take test payments by mistake); otherwise a test one.
+ */
 function secretKey() {
   const key = process.env.PAYSTACK_SECRET_KEY?.trim();
   if (!key) throw new Error("PAYSTACK_SECRET_KEY is not set.");
-  if (!/^sk_test_\w+$/.test(key)) {
-    throw new Error("PAYSTACK_SECRET_KEY must be a Paystack test secret key (sk_test_…).");
+  const live = process.env.PAYSTACK_MODE?.trim() === "live";
+  if (!live) {
+    if (!/^sk_test_\w+$/.test(key)) {
+      throw new Error('PAYSTACK_SECRET_KEY must be a Paystack test secret key (sk_test_…) unless PAYSTACK_MODE is "live".');
+    }
+    return key;
+  }
+  if (!/^sk_live_\w+$/.test(key)) {
+    throw new Error('PAYSTACK_MODE is "live", so PAYSTACK_SECRET_KEY must be a live secret key (sk_live_…).');
+  }
+  if (process.env.NODE_ENV !== "production") {
+    throw new Error("Live Paystack keys are only used in a production build, never in development or tests.");
+  }
+  if (!appUrl().startsWith("https://")) {
+    throw new Error("Live Paystack keys need BETTER_AUTH_URL to be an https:// address.");
   }
   return key;
 }

@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 
+import { appUrl } from "@/lib/app-url";
+
 import "./globals.css";
 
 const geistSans = Geist({
@@ -9,6 +11,8 @@ const geistSans = Geist({
 });
 
 export const metadata: Metadata = {
+  // Absolute URLs for Open Graph images and canonical links, from configuration (not the request).
+  metadataBase: new URL(appUrl()),
   title: {
     default: "Sydo | Luxury Fashion & Accessories",
     template: "%s | Sydo",

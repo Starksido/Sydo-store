@@ -1,0 +1,29 @@
+# Expires unpaid orders (returning their stock and discount uses) and deletes stale guest bags, by
+# calling the app's cron endpoint every 15 minutes. Set up in GitHub → Settings → Secrets and
+# variables → Actions:
+#   - variable SITE_URL: the live site, e.g. https://shop.example.com (no trailing slash)
+#   - secret CRON_SECRET: the same value as the app's CRON_SECRET
+# Until SITE_URL is set, the job is skipped. GitHub may run scheduled jobs a few minutes late.
+name: Expire unpaid orders
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  expire-orders:
+    if: ${{ vars.SITE_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call the cron endpoint
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl --fail-with-body --silent --show-error --max-time 120 \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            "${SITE_URL}/api/cron/expire-orders"

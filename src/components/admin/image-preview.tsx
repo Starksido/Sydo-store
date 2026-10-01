@@ -1,10 +1,10 @@
 import Image from "next/image";
 
-import { isUnsplashUrl } from "@/lib/admin/product-input";
+import { isAllowedImageUrl } from "@/lib/admin/product-input";
 
 /** The image at `src` in a product-shaped frame, or a note while the URL isn't a valid Unsplash one. */
 export function ImagePreview({ src, alt, className = "w-28" }: { src: string; alt: string; className?: string }) {
-  const valid = isUnsplashUrl(src.trim());
+  const valid = isAllowedImageUrl(src.trim());
   return (
     <div className={`media-frame shrink-0 ${className}`}>
       {valid ? (

@@ -55,7 +55,13 @@ function readAuthSecret() {
 
 export const auth = betterAuth({
   secret: readAuthSecret(),
+  // From configuration, never the request's Host header; only our own origin may call auth endpoints.
+  baseURL: appUrl(),
+  trustedOrigins: [appUrl()],
   database: drizzleAdapter(db, { provider: "pg" }),
+  // On in production (Better Auth's default). Kept in the database: on serverless, each instance
+  // would otherwise count separately in memory.
+  rateLimit: { storage: "database" },
   emailAndPassword: {
     enabled: true,
     // No session until the email is confirmed. Sign-up then answers the same whether or not the

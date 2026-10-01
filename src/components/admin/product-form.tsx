@@ -4,6 +4,7 @@ import { useActionState } from "react";
 
 import type { ProductFormState } from "@/app/admin/products/actions";
 import { Field, fieldProps } from "@/components/admin/field";
+import { GalleryField } from "@/components/admin/gallery-field";
 import { ImageField } from "@/components/admin/image-field";
 import { SizeRows } from "@/components/admin/size-rows";
 import type { ProductField, ProductFormValues } from "@/lib/admin/product-input";
@@ -99,14 +100,7 @@ export function ProductForm({ action, initial, sizeStock, categories, submitLabe
           defaultValue={values.altImage}
           error={errors.altImage}
         />
-        <Field
-          id="gallery"
-          label="Gallery (optional)"
-          error={errors.gallery}
-          hint="More images for the product page: one https://images.unsplash.com/… URL per line."
-        >
-          <textarea {...props("gallery", true)} rows={4} className="input py-3" />
-        </Field>
+        <GalleryField defaultValue={values.gallery} error={errors.gallery} />
       </div>
 
       <Field id="badge" label="Badge (optional)" error={errors.badge} hint="A short label on the product, e.g. New.">

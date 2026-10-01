@@ -1,36 +1,111 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Sydo
 
-## Getting Started
+An online fashion store for Kenya: a storefront with sizes, a bag (for guests too), wishlists,
+reviews and discount codes, checkout with M-Pesa or card through Paystack, order emails, and an
+admin for products, stock, orders, refunds, reviews, discounts and admins.
 
-First, run the development server:
+Built with Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS v4, Better Auth, Drizzle ORM
+and Postgres on Neon. Payments: Paystack. Email: Resend. Images: Vercel Blob. Hosting: Vercel.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+Working notes for the codebase (architecture, conventions, data rules) are in [`CLAUDE.md`](CLAUDE.md).
+
+## Run it locally
+
+You need Node.js 20 or later, npm, and a [Neon](https://neon.tech) account (the free plan is enough).
+
+1. Install: `npm install`
+2. Create two Neon databases in the same project: one for the store (e.g. `sydo`) and an **empty**
+   one for tests whose name ends in `_test` (e.g. `sydo_test`).
+3. Copy `.env.example` to `.env.local` and fill it in (see [Environment variables](#environment-variables)).
+   For tests, put `TEST_DATABASE_URL` in `.env.test.local`.
+4. Create the tables: `npm run db:migrate`
+5. Add the sample catalog (optional, development only): `npm run db:seed`
+6. Start: `npm run dev`, then open http://localhost:3000
+
+Without a Resend key, development prints emails (with their links) to the terminal, so you can
+confirm accounts and reset passwords locally.
+
+### Make yourself an admin
+
+Sign up on the site and confirm your email, then run this on the store database in the Neon SQL
+editor:
+
+```sql
+update "user" set role = 'admin' where email = 'you@example.com';
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Sign out and in again, then open `/admin`. From there, admins add and remove other admins on
+`/admin/users`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Commands
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Development server on http://localhost:3000 |
+| `npm run build` / `npm run start` | Production build, and serving it |
+| `npm run lint` | ESLint |
+| `npx tsc --noEmit` | Typecheck (run `npm run build` or `npx next typegen` first on a fresh checkout) |
+| `npm run test` | Tests, against `TEST_DATABASE_URL` only (they refuse any database not named `*_test`) |
+| `npm run db:generate` | Write a migration after changing `src/db/schema.ts` |
+| `npm run db:migrate` | Apply migrations to `DATABASE_URL` |
+| `npm run db:seed` | Add the sample catalog (never on production) |
 
-## Learn More
+## Environment variables
 
-To learn more about Next.js, take a look at the following resources:
+| Variable | Where it comes from |
+| --- | --- |
+| `DATABASE_URL` | Neon → Connection Details (pooled). Needed at build time too. |
+| `BETTER_AUTH_SECRET` | `npx auth secret`. At least 32 random bytes; the app refuses to start otherwise. |
+| `BETTER_AUTH_URL` | The site's public URL, e.g. `https://shop.example.com` (`http://localhost:3000` locally). |
+| `NEXT_PUBLIC_BETTER_AUTH_URL` | The same URL. Built into the browser code, so set it before building. |
+| `PAYSTACK_SECRET_KEY` | Paystack → Settings → API Keys & Webhooks. `sk_test_…` until you go live. |
+| `PAYSTACK_MODE` | Empty for test mode; `live` (production only) with an `sk_live_…` key. |
+| `RESEND_API_KEY`, `EMAIL_FROM` | Resend → API Keys; `EMAIL_FROM` on a domain verified in Resend, e.g. `Sydo <orders@example.com>`. |
+| `BLOB_READ_WRITE_TOKEN` | Vercel → Storage → Blob. Set for you when the store is connected to the project. |
+| `CRON_SECRET` | Any long random string (`npx auth secret` works). Also stored as a GitHub secret. |
+| `TEST_DATABASE_URL` | In `.env.test.local` only: the empty `*_test` database. |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Database changes
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Edit `src/db/schema.ts`, run `npm run db:generate`, review the SQL in `drizzle/`, then
+`npm run db:migrate`. Commit the `drizzle/` folder. Don't use `db:push` on a shared or production
+database. Browse data in the Neon SQL editor; don't run Drizzle Studio (`drizzle-kit studio`): its
+local server runs any SQL sent to it and allows any website's requests, so a page open in your
+browser could read the database. Tests apply the committed migrations to the test database themselves.
 
-## Deploy on Vercel
+## Deploy (Vercel)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. **Production database.** Create a separate Neon database for production (not a branch of your
+   development data). Run the migrations against it: put its URL in `DATABASE_URL` temporarily and
+   run `npm run db:migrate`, then restore your local value. Don't seed it.
+2. **Vercel project.** Import the GitHub repository. Under Settings → Environment Variables, add
+   every variable above for Production (not `TEST_DATABASE_URL`), with `BETTER_AUTH_URL` and
+   `NEXT_PUBLIC_BETTER_AUTH_URL` set to your domain.
+3. **Images.** Vercel → Storage → create a Blob store and connect it to the project; this adds
+   `BLOB_READ_WRITE_TOKEN`. Admins can then upload product and category images.
+4. **Domain.** Add your domain in Vercel, then redeploy so the build picks up the URLs.
+5. **Email.** Add the domain in Resend and set the DNS records it lists (SPF and DKIM), then set
+   `EMAIL_FROM` on that domain.
+6. **Paystack.** In the dashboard, set the webhook URL to `https://<your domain>/api/webhooks/paystack`
+   and the callback domain to your domain.
+7. **Cron.** In GitHub → Settings → Secrets and variables → Actions, add the variable `SITE_URL`
+   (`https://<your domain>`, no trailing slash) and the secret `CRON_SECRET` (the same value as in
+   Vercel). The workflow in `.github/workflows/expire-orders.yml` then calls
+   `/api/cron/expire-orders` every 15 minutes: it expires unpaid orders after 60 minutes (returning
+   their stock and discount uses) and deletes guest bags untouched for 30 days. Run it by hand from
+   the Actions tab to check it.
+8. **First admin.** Sign up on the live site, confirm your email, and run the SQL in
+   [Make yourself an admin](#make-yourself-an-admin) on the production database.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Going live with real payments
+
+Until then, keep test keys everywhere: the app refuses a live key unless `PAYSTACK_MODE=live`, and
+only in a production build on an https URL.
+
+1. Complete Paystack's business verification.
+2. In Paystack's **live** dashboard, set the same webhook URL and callback domain.
+3. In Vercel (Production only), set `PAYSTACK_SECRET_KEY` to the `sk_live_…` key and
+   `PAYSTACK_MODE=live`, and redeploy.
+4. Add your real products, images and delivery details, and your privacy, terms and returns pages.
+5. Place a small real order, then refund it in the Paystack dashboard and record the refund on
+   `/admin/refunds`, to check the whole flow.

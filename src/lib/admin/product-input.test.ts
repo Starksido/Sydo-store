@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { stockAdjustmentReason } from "@/db/schema";
 import {
   EMPTY_PRODUCT_FORM,
-  isUnsplashUrl,
+  isAllowedImageUrl,
   parseCategoryInput,
   parseProductInput,
   parseStockInput,
@@ -209,9 +209,19 @@ describe("helpers", () => {
     expect(slugify("---")).toBe("");
   });
 
-  it("isUnsplashUrl accepts only https images.unsplash.com paths", () => {
-    expect(isUnsplashUrl(IMAGE)).toBe(true);
-    expect(isUnsplashUrl("not a url")).toBe(false);
+  it("isAllowedImageUrl accepts only https Unsplash and Vercel Blob image paths", () => {
+    expect(isAllowedImageUrl(IMAGE)).toBe(true);
+    expect(isAllowedImageUrl("https://abc123xyz.public.blob.vercel-storage.com/products/a.webp")).toBe(true);
+    for (const url of [
+      "not a url",
+      "http://abc123xyz.public.blob.vercel-storage.com/products/a.webp",
+      "https://evil.com/abc123xyz.public.blob.vercel-storage.com/a.webp",
+      "https://public.blob.vercel-storage.com.evil.com/a.webp",
+      "https://abc123xyz.public.blob.vercel-storage.com/",
+      "https://user:pass@images.unsplash.com/photo-1",
+    ]) {
+      expect(isAllowedImageUrl(url), url).toBe(false);
+    }
   });
 });
 

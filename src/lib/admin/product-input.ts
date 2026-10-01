@@ -1,5 +1,5 @@
 // Parses and validates the admin product and category forms. No database access, so the client-side
-// forms can import the types and `isUnsplashUrl`. Uniqueness (slug, SKU) is checked by the database.
+// forms can import the types and `isAllowedImageUrl`. Uniqueness (slug, SKU) is checked by the database.
 
 /** A size row as submitted: `id` is the saved size's (variant's) id, or "" for a new size. */
 export type SizeRowValues = { id: string; label: string };
@@ -77,16 +77,25 @@ const MAX_FIELD = 10_000;
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SKU = /^[A-Z0-9]+(?:-[A-Z0-9]+)*$/;
 
-/** Only images.unsplash.com over https, the one host `next.config.ts` allows images from. */
-export function isUnsplashUrl(value: string) {
+/** A Vercel Blob store's public host, where admin uploads go. */
+const BLOB_HOST = /^[a-z0-9]+\.public\.blob\.vercel-storage\.com$/;
+
+/**
+ * Only https images from Unsplash or from a Vercel Blob store (admin uploads), the hosts
+ * `next.config.ts` allows images from.
+ */
+export function isAllowedImageUrl(value: string) {
   if (value.length > MAX_URL) return false;
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && url.hostname === "images.unsplash.com" && url.pathname.length > 1;
+    const host = url.hostname === "images.unsplash.com" || BLOB_HOST.test(url.hostname);
+    return url.protocol === "https:" && host && url.pathname.length > 1 && !url.username && !url.password;
   } catch {
     return false;
   }
 }
+
+const IMAGE_URL_HINT = "Upload an image, or use an https://images.unsplash.com/… URL.";
 
 /** A URL slug from a name: "Floral silk wrap dress" → "floral-silk-wrap-dress". */
 export function slugify(value: string) {
@@ -197,14 +206,14 @@ export function parseProductInput(values: ProductFormValues): ParseResult<Produc
 
   const image = values.image.trim();
   if (!image) errors.image = "Enter the main image URL.";
-  else if (!isUnsplashUrl(image)) errors.image = "Use an https://images.unsplash.com/… URL.";
+  else if (!isAllowedImageUrl(image)) errors.image = IMAGE_URL_HINT;
 
   const altImage = values.altImage.trim();
-  if (altImage && !isUnsplashUrl(altImage)) errors.altImage = "Use an https://images.unsplash.com/… URL.";
+  if (altImage && !isAllowedImageUrl(altImage)) errors.altImage = IMAGE_URL_HINT;
 
   const gallery = lines(values.gallery);
   if (gallery.length > MAX_GALLERY) errors.gallery = `Use ${MAX_GALLERY} images or fewer.`;
-  else if (!gallery.every(isUnsplashUrl)) errors.gallery = "Put one https://images.unsplash.com/… URL on each line.";
+  else if (!gallery.every(isAllowedImageUrl)) errors.gallery = "Put one uploaded or Unsplash image URL on each line.";
 
   const details = lines(values.details);
   if (details.length > MAX_DETAILS) errors.details = `Use ${MAX_DETAILS} lines or fewer.`;
@@ -285,7 +294,7 @@ export function parseCategoryInput(values: CategoryFormValues): ParseResult<Cate
   if (slugError) errors.slug = slugError;
 
   const image = values.image.trim();
-  if (image && !isUnsplashUrl(image)) errors.image = "Use an https://images.unsplash.com/… URL.";
+  if (image && !isAllowedImageUrl(image)) errors.image = IMAGE_URL_HINT;
 
   const positionText = values.position.trim() || "0";
   const position = /^\d{1,4}$/.test(positionText) ? Number(positionText) : NaN;

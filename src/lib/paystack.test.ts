@@ -37,6 +37,26 @@ describe("secret key", () => {
     mockPaystack();
     await expect(verifyTransaction("SY-AAAA2222-BBBB3333")).rejects.toThrow("test secret key");
   });
+
+  it("takes a live key only with PAYSTACK_MODE=live, in production, on https", async () => {
+    mockPaystack();
+    const verify = () => verifyTransaction("SY-AAAA2222-BBBB3333");
+    vi.stubEnv("PAYSTACK_MODE", "live");
+
+    // Live mode refuses a test key, so a live site can't take test payments.
+    await expect(verify()).rejects.toThrow("must be a live secret key");
+
+    vi.stubEnv("PAYSTACK_SECRET_KEY", "sk_live_abc123");
+    await expect(verify()).rejects.toThrow("only used in a production build"); // NODE_ENV is "test"
+
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("BETTER_AUTH_URL", "http://shop.example.com");
+    await expect(verify()).rejects.toThrow("https://");
+
+    // Past the key check: the request reaches (the mock of) Paystack.
+    vi.stubEnv("BETTER_AUTH_URL", "https://shop.example.com");
+    await expect(verify()).rejects.toThrow("paystack-mock: no verify reply");
+  });
 });
 
 describe("initializeTransaction", () => {

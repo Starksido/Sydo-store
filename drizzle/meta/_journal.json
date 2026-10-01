@@ -134,6 +134,13 @@
       "when": 1790860601390,
       "tag": "0018_discounts",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1790872638457,
+      "tag": "0019_rate_limit",
+      "breakpoints": true
     }
   ]
 }
