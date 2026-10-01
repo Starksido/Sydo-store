@@ -4,8 +4,12 @@ import type { StockHistoryEntry } from "@/lib/stock";
 
 const reasonLabel = (value: string) => STOCK_REASONS.find((r) => r.value === value)?.label ?? value;
 
-/** A product's manual stock changes, newest first. Sales and expired orders aren't listed. */
-export function StockHistory({ entries }: { entries: StockHistoryEntry[] }) {
+/**
+ * A product's manual stock changes, newest first. Sales and expired orders aren't listed. `sized`
+ * adds a size column; changes made before stock was kept per size were to the total ("All sizes").
+ */
+export function StockHistory({ entries, sized = false }: { entries: StockHistoryEntry[]; sized?: boolean }) {
+  const showSize = sized || entries.some((entry) => entry.size !== null);
   if (entries.length === 0) {
     return <p className="border-y py-6 text-sm text-muted">No manual stock changes yet.</p>;
   }
@@ -16,6 +20,7 @@ export function StockHistory({ entries }: { entries: StockHistoryEntry[] }) {
         <thead>
           <tr>
             <th scope="col">When</th>
+            {showSize && <th scope="col">Size</th>}
             <th scope="col" className="text-right">
               Change
             </th>
@@ -32,6 +37,7 @@ export function StockHistory({ entries }: { entries: StockHistoryEntry[] }) {
           {entries.map((entry) => (
             <tr key={entry.id}>
               <td className="text-muted">{formatOrderDate(entry.createdAt)}</td>
+              {showSize && <td>{entry.size ?? (entry.variantId === null ? "All sizes" : "One size")}</td>}
               <td className={`text-right tabular-nums ${entry.delta > 0 ? "text-success" : "text-error"}`}>
                 {entry.delta > 0 ? `+${entry.delta}` : `−${-entry.delta}`}
               </td>

@@ -11,7 +11,17 @@ import { placeOrder } from "@/lib/orders";
 import { expireUnpaidOrders } from "@/lib/payments";
 import { adjustStock, decrementStock, getStockHistory, setStockTo } from "@/lib/stock";
 
-import { createCartLine, createProduct, createUser, getStock, resetCatalog, setStock } from "../../tests/fixtures";
+import {
+  createCartLine,
+  createProduct,
+  createSizedProduct,
+  createUser,
+  getStock,
+  getVariantId,
+  getVariantStock,
+  resetCatalog,
+  setStock,
+} from "../../tests/fixtures";
 import { ageOrder, createOrder, delivery } from "../../tests/orders";
 import { mockPaystack } from "../../tests/paystack-mock";
 
@@ -50,6 +60,8 @@ async function adjustments() {
   return db
     .select({
       productId: stockAdjustments.productId,
+      variantId: stockAdjustments.variantId,
+      size: stockAdjustments.size,
       userId: stockAdjustments.userId,
       delta: stockAdjustments.delta,
       previousStock: stockAdjustments.previousStock,
@@ -61,9 +73,10 @@ async function adjustments() {
     .orderBy(asc(stockAdjustments.id));
 }
 
-/** A product with `stock` units and an admin to adjust it. */
+/** A one-size product with `stock` units, its variant, and an admin to adjust it. */
 async function setup(stock: number) {
-  return { productId: await createProduct(stock), userId: await createUser() };
+  const productId = await createProduct(stock);
+  return { productId, variantId: await getVariantId(productId), userId: await createUser() };
 }
 
 /** Every log row adds up, and the last one ends at the product's current stock. */
@@ -75,21 +88,21 @@ async function expectLogConsistent(productId: number) {
 
 describe("adjustStock", () => {
   it("raises and lowers stock, logging each change with who, why and the before and after", async () => {
-    const { productId, userId } = await setup(3);
+    const { productId, variantId, userId } = await setup(3);
 
-    expect(await adjustStock({ productId, delta: 10, reason: "received", note: "Invoice 42", userId })).toEqual({
+    expect(await adjustStock({ productId, variantId, delta: 10, reason: "received", note: "Invoice 42", userId })).toEqual({
       ok: true,
       stock: 13,
     });
-    expect(await adjustStock({ productId, delta: -2, reason: "damaged", note: null, userId })).toEqual({
+    expect(await adjustStock({ productId, variantId, delta: -2, reason: "damaged", note: null, userId })).toEqual({
       ok: true,
       stock: 11,
     });
 
     expect(await getStock(productId)).toBe(11);
     expect(await adjustments()).toEqual([
-      { productId, userId, delta: 10, previousStock: 3, newStock: 13, reason: "received", note: "Invoice 42" },
-      { productId, userId, delta: -2, previousStock: 13, newStock: 11, reason: "damaged", note: null },
+      { productId, variantId, size: null, userId, delta: 10, previousStock: 3, newStock: 13, reason: "received", note: "Invoice 42" },
+      { productId, variantId, size: null, userId, delta: -2, previousStock: 13, newStock: 11, reason: "damaged", note: null },
     ]);
     expect(await getStockHistory(productId)).toMatchObject([
       { delta: -2, previousStock: 13, newStock: 11, reason: "damaged", user: { email: expect.stringContaining("@") } },
@@ -98,9 +111,9 @@ describe("adjustStock", () => {
   });
 
   it("refuses, changing and logging nothing, to take stock below 0", async () => {
-    const { productId, userId } = await setup(2);
+    const { productId, variantId, userId } = await setup(2);
 
-    expect(await adjustStock({ productId, delta: -3, reason: "damaged", note: null, userId })).toEqual({
+    expect(await adjustStock({ productId, variantId, delta: -3, reason: "damaged", note: null, userId })).toEqual({
       ok: false,
       reason: "insufficient",
       current: 2,
@@ -109,18 +122,49 @@ describe("adjustStock", () => {
     expect(await adjustments()).toEqual([]);
 
     // Down to exactly 0 is fine.
-    expect(await adjustStock({ productId, delta: -2, reason: "damaged", note: null, userId })).toEqual({
+    expect(await adjustStock({ productId, variantId, delta: -2, reason: "damaged", note: null, userId })).toEqual({
       ok: true,
       stock: 0,
     });
   });
 
-  it("reports a missing product", async () => {
-    const { userId } = await setup(1);
-    expect(await adjustStock({ productId: 999_999, delta: 1, reason: "received", note: null, userId })).toEqual({
-      ok: false,
-      reason: "not-found",
-    });
+  it("changes only the chosen size, recording its label", async () => {
+    const userId = await createUser();
+    const { productId, variants } = await createSizedProduct([
+      ["S", 1],
+      ["M", 2],
+    ]);
+
+    expect(
+      await adjustStock({ productId, variantId: variants.M, delta: 3, reason: "received", note: null, userId }),
+    ).toEqual({ ok: true, stock: 5 });
+
+    expect(await getVariantStock(variants.S)).toBe(1);
+    expect(await getVariantStock(variants.M)).toBe(5);
+    expect(await adjustments()).toEqual([
+      { productId, variantId: variants.M, size: "M", userId, delta: 3, previousStock: 2, newStock: 5, reason: "received", note: null },
+    ]);
+    expect(await getStockHistory(productId)).toMatchObject([{ variantId: variants.M, size: "M", delta: 3 }]);
+  });
+
+  it("reports a missing size, or one of another product, as not found", async () => {
+    const { productId, userId } = await setup(1);
+    const other = await getVariantId(await createProduct(1));
+    for (const target of [
+      { productId, variantId: 999_999 },
+      { productId: 999_999, variantId: other },
+      { productId, variantId: other },
+    ]) {
+      expect(await adjustStock({ ...target, delta: 1, reason: "received", note: null, userId })).toEqual({
+        ok: false,
+        reason: "not-found",
+      });
+      expect(await setStockTo({ ...target, expected: 1, stock: 2, reason: "received", note: null, userId })).toEqual({
+        ok: false,
+        reason: "not-found",
+      });
+    }
+    expect(await getVariantStock(other)).toBe(1);
     expect(await adjustments()).toEqual([]);
   });
 
@@ -129,43 +173,45 @@ describe("adjustStock", () => {
     for (const bad of [
       { productId: 0, delta: 1 },
       { productId: 1.5, delta: 1 },
+      { productId: 1, variantId: 0, delta: 1 },
+      { productId: 1, variantId: 1.5, delta: 1 },
       { productId: 1, delta: 0 },
       { productId: 1, delta: 0.5 },
       { productId: 1, delta: 1_000_001 },
       { productId: 1, delta: -1_000_001 },
       { productId: 1, delta: Number.NaN },
     ]) {
-      await expect(adjustStock({ ...bad, ...meta }), JSON.stringify(bad)).rejects.toThrow(/^adjustStock: invalid/);
+      await expect(adjustStock({ variantId: 1, ...bad, ...meta }), JSON.stringify(bad)).rejects.toThrow(/^adjustStock: invalid/);
     }
-    await expect(adjustStock({ productId: 1, delta: 1, ...meta, reason: "stolen" as "other" })).rejects.toThrow();
-    await expect(adjustStock({ productId: 1, delta: 1, ...meta, note: "x".repeat(501) })).rejects.toThrow();
-    await expect(adjustStock({ productId: 1, delta: 1, ...meta, userId: "" })).rejects.toThrow();
+    await expect(adjustStock({ productId: 1, variantId: 1, delta: 1, ...meta, reason: "stolen" as "other" })).rejects.toThrow();
+    await expect(adjustStock({ productId: 1, variantId: 1, delta: 1, ...meta, note: "x".repeat(501) })).rejects.toThrow();
+    await expect(adjustStock({ productId: 1, variantId: 1, delta: 1, ...meta, userId: "" })).rejects.toThrow();
   });
 });
 
 describe("setStockTo", () => {
   it("sets stock when it's still what the admin saw, logging the difference", async () => {
-    const { productId, userId } = await setup(4);
+    const { productId, variantId, userId } = await setup(4);
 
-    expect(await setStockTo({ productId, expected: 4, stock: 9, reason: "correction", note: null, userId })).toEqual({
+    expect(await setStockTo({ productId, variantId, expected: 4, stock: 9, reason: "correction", note: null, userId })).toEqual({
       ok: true,
       stock: 9,
       changed: true,
     });
     expect(
-      await setStockTo({ productId, expected: 9, stock: 0, reason: "correction", note: "Count", userId }),
+      await setStockTo({ productId, variantId, expected: 9, stock: 0, reason: "correction", note: "Count", userId }),
     ).toEqual({ ok: true, stock: 0, changed: true });
     expect(await adjustments()).toEqual([
-      { productId, userId, delta: 5, previousStock: 4, newStock: 9, reason: "correction", note: null },
-      { productId, userId, delta: -9, previousStock: 9, newStock: 0, reason: "correction", note: "Count" },
+      { productId, variantId, size: null, userId, delta: 5, previousStock: 4, newStock: 9, reason: "correction", note: null },
+      { productId, variantId, size: null, userId, delta: -9, previousStock: 9, newStock: 0, reason: "correction", note: "Count" },
     ]);
   });
 
   it("refuses a stale set, reporting the current stock and changing nothing", async () => {
-    const { productId, userId } = await setup(4);
+    const { productId, variantId, userId } = await setup(4);
     await setStock(productId, 3); // a sale since the page loaded
 
-    expect(await setStockTo({ productId, expected: 4, stock: 10, reason: "received", note: null, userId })).toEqual({
+    expect(await setStockTo({ productId, variantId, expected: 4, stock: 10, reason: "received", note: null, userId })).toEqual({
       ok: false,
       reason: "stale",
       current: 3,
@@ -175,8 +221,8 @@ describe("setStockTo", () => {
   });
 
   it("writes nothing when stock already has that value", async () => {
-    const { productId, userId } = await setup(4);
-    expect(await setStockTo({ productId, expected: 4, stock: 4, reason: "correction", note: null, userId })).toEqual({
+    const { productId, variantId, userId } = await setup(4);
+    expect(await setStockTo({ productId, variantId, expected: 4, stock: 4, reason: "correction", note: null, userId })).toEqual({
       ok: true,
       stock: 4,
       changed: false,
@@ -184,20 +230,16 @@ describe("setStockTo", () => {
     expect(await adjustments()).toEqual([]);
   });
 
-  it("reports a missing product and rejects invalid input", async () => {
+  it("rejects invalid input", async () => {
     const { userId } = await setup(1);
     const meta = { reason: "correction" as const, note: null, userId };
-    expect(await setStockTo({ productId: 999_999, expected: 0, stock: 1, ...meta })).toEqual({
-      ok: false,
-      reason: "not-found",
-    });
     for (const bad of [
       { expected: -1, stock: 1 },
       { expected: 0, stock: -1 },
       { expected: 0, stock: 1.5 },
       { expected: 0, stock: 1_000_001 },
     ]) {
-      await expect(setStockTo({ productId: 1, ...bad, ...meta }), JSON.stringify(bad)).rejects.toThrow(
+      await expect(setStockTo({ productId: 1, variantId: 1, ...bad, ...meta }), JSON.stringify(bad)).rejects.toThrow(
         /^setStockTo: invalid/,
       );
     }
@@ -208,10 +250,10 @@ describe("stock adjustments under concurrency", () => {
   it("lets exactly one of an admin removal and a sale take the last units", async () => {
     for (let run = 0; run < 3; run++) {
       await resetCatalog();
-      const { productId, userId } = await setup(2);
+      const { productId, variantId, userId } = await setup(2);
       const [removed, sold] = await Promise.all([
-        adjustStock({ productId, delta: -2, reason: "damaged", note: null, userId }),
-        decrementStock([{ productId, quantity: 2 }]),
+        adjustStock({ productId, variantId, delta: -2, reason: "damaged", note: null, userId }),
+        decrementStock([{ variantId, quantity: 2 }]),
       ]);
       expect([removed.ok, sold.ok].filter(Boolean)).toHaveLength(1);
       const { rows, stock } = await expectLogConsistent(productId);
@@ -221,12 +263,12 @@ describe("stock adjustments under concurrency", () => {
   });
 
   it("adds stock correctly while a customer places an order", async () => {
-    const { productId, userId } = await setup(1);
+    const { productId, variantId, userId } = await setup(1);
     const customer = await createUser();
     const lineId = await createCartLine(customer, productId, 1);
 
     const [added, placed] = await Promise.all([
-      adjustStock({ productId, delta: 5, reason: "received", note: null, userId }),
+      adjustStock({ productId, variantId, delta: 5, reason: "received", note: null, userId }),
       placeOrder(customer, { checkoutKey: randomUUID(), lines: [{ lineId, quantity: 1 }], delivery }),
     ]);
 
@@ -244,10 +286,10 @@ describe("stock adjustments under concurrency", () => {
   it("refuses a stale set, never overwriting a sale that lands first", async () => {
     for (let run = 0; run < 3; run++) {
       await resetCatalog();
-      const { productId, userId } = await setup(5);
+      const { productId, variantId, userId } = await setup(5);
       const [set, sold] = await Promise.all([
-        setStockTo({ productId, expected: 5, stock: 10, reason: "correction", note: null, userId }),
-        decrementStock([{ productId, quantity: 2 }]),
+        setStockTo({ productId, variantId, expected: 5, stock: 10, reason: "correction", note: null, userId }),
+        decrementStock([{ variantId, quantity: 2 }]),
       ]);
       expect(sold.ok).toBe(true);
       // Set first: 5 → 10, then the sale: 8. Sale first: 3, and the set is refused as stale.
@@ -259,14 +301,14 @@ describe("stock adjustments under concurrency", () => {
   });
 
   it("stays consistent with the expiry sweep returning stock", async () => {
-    const { productId, userId } = await setup(3);
+    const { productId, variantId, userId } = await setup(3);
     const customer = await createUser();
     const reference = await createOrder(customer, [[productId, 2]]);
     await ageOrder(reference, 61);
     expect(await getStock(productId)).toBe(1);
 
     const [removed, expired] = await Promise.all([
-      adjustStock({ productId, delta: -3, reason: "damaged", note: null, userId }),
+      adjustStock({ productId, variantId, delta: -3, reason: "damaged", note: null, userId }),
       expireUnpaidOrders(),
     ]);
 
@@ -278,24 +320,24 @@ describe("stock adjustments under concurrency", () => {
     expect(paystack.initialized).toEqual([]);
   });
 
-  describe("while another transaction holds the product's row lock", () => {
+  describe("while another transaction holds the variant's row lock", () => {
     // An interactive transaction (WebSocket) that holds the lock while the adjustment waits on it.
     const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     afterAll(() => pool.end());
 
-    async function holdSale(productId: number) {
+    async function holdSale(variantId: number) {
       const client = await pool.connect();
       await client.query("begin");
-      await client.query("update products set stock = stock - 1 where id = $1", [productId]);
+      await client.query("update product_variants set stock = stock - 1 where id = $1", [variantId]);
       return client;
     }
 
     it("waits, then checks against the committed stock", async () => {
-      const { productId, userId } = await setup(1);
-      const other = await holdSale(productId);
+      const { productId, variantId, userId } = await setup(1);
+      const other = await holdSale(variantId);
       try {
-        const removal = adjustStock({ productId, delta: -1, reason: "damaged", note: null, userId });
-        const set = setStockTo({ productId, expected: 1, stock: 4, reason: "correction", note: null, userId });
+        const removal = adjustStock({ productId, variantId, delta: -1, reason: "damaged", note: null, userId });
+        const set = setStockTo({ productId, variantId, expected: 1, stock: 4, reason: "correction", note: null, userId });
         await waitForLockWait();
         await other.query("commit");
 
@@ -309,10 +351,10 @@ describe("stock adjustments under concurrency", () => {
     });
 
     it("applies once the other transaction rolls back", async () => {
-      const { productId, userId } = await setup(1);
-      const other = await holdSale(productId);
+      const { productId, variantId, userId } = await setup(1);
+      const other = await holdSale(variantId);
       try {
-        const set = setStockTo({ productId, expected: 1, stock: 4, reason: "correction", note: null, userId });
+        const set = setStockTo({ productId, variantId, expected: 1, stock: 4, reason: "correction", note: null, userId });
         await waitForLockWait();
         await other.query("rollback");
 
@@ -342,13 +384,13 @@ describe("stock_adjustments constraints", () => {
   });
 
   it("keeps the log when a product is deleted, and blocks deleting the admin", async () => {
-    const { productId, userId } = await setup(1);
-    await adjustStock({ productId, delta: 1, reason: "received", note: null, userId });
+    const { productId, variantId, userId } = await setup(1);
+    await adjustStock({ productId, variantId, delta: 1, reason: "received", note: null, userId });
 
     const deleteUser = await db.execute(sql`delete from "user" where id = ${userId}`).catch((e: unknown) => e);
     expect(sqlState(deleteUser)).toBe("23001"); // restrict_violation
 
     await db.execute(sql`delete from products where id = ${productId}`);
-    expect(await adjustments()).toMatchObject([{ productId: null, delta: 1 }]);
+    expect(await adjustments()).toMatchObject([{ productId: null, variantId: null, delta: 1 }]);
   });
 });

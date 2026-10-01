@@ -2,7 +2,7 @@
 
 import { refresh } from "next/cache";
 
-import { addCartItem, getCart, getCartProduct, removeCartItem, setCartItemQuantity } from "@/lib/cart";
+import { addCartItem, getCart, getCartVariant, removeCartItem, setCartItemQuantity } from "@/lib/cart";
 import { requireSession } from "@/lib/session";
 
 export type CartActionResult = { ok: true; count: number } | { ok: false; message: string };
@@ -13,29 +13,23 @@ function isId(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) > 0;
 }
 
-/** Adds one unit. Guests are sent to sign in and back to the product page. */
-export async function addToCart(productId: unknown, size: unknown): Promise<CartActionResult> {
-  if (!isId(productId)) return { ok: false, message: "This product is unavailable." };
-  const product = await getCartProduct(productId);
-  if (!product) return { ok: false, message: "This product is unavailable." };
+/** Adds one unit of a size (variant). Guests are sent to sign in and back to the product page. */
+export async function addToCart(variantId: unknown): Promise<CartActionResult> {
+  if (!isId(variantId)) return { ok: false, message: "This product is unavailable." };
+  const variant = await getCartVariant(variantId);
+  if (!variant) return { ok: false, message: "This product is unavailable." };
 
-  const { user } = await requireSession(`/products/${product.slug}`);
+  const { user } = await requireSession(`/products/${variant.slug}`);
 
-  if (product.sizes) {
-    const option = product.sizes.find((s) => s.label === size);
-    if (!option) return { ok: false, message: "Please select a size." };
-    if (!option.available) return { ok: false, message: `Size ${option.label} is unavailable.` };
-  } else if (size !== null) {
-    return { ok: false, message: "This product comes in one size." };
-  }
-
-  if (!(await addCartItem(user.id, productId, product.sizes ? (size as string) : null, 1))) {
+  if (!(await addCartItem(user.id, variantId, 1))) {
     return {
       ok: false,
       message:
-        product.stock > 0
-          ? `You already have all ${product.stock} available in your bag.`
-          : "This piece is sold out.",
+        variant.stock > 0
+          ? `You already have all ${variant.stock} available in your bag.`
+          : variant.label
+            ? `Size ${variant.label} is sold out.`
+            : "This piece is sold out.",
     };
   }
   const { count } = await getCart(user.id);

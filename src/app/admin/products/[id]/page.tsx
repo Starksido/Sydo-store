@@ -49,6 +49,7 @@ export default async function EditProductPage({ params, searchParams }: PageProp
   const stockMessage = typeof saved === "string" ? STOCK_MESSAGES[saved] : undefined;
   const initial = productFormValues(product);
   const archived = Boolean(product.archivedAt);
+  const sized = product.variants.some((variant) => variant.label !== null);
 
   return (
     <section aria-labelledby="product-heading" className="container-page section">
@@ -99,10 +100,11 @@ export default async function EditProductPage({ params, searchParams }: PageProp
         <div className="mt-10">
           <ProductForm
             // Remount when the saved values change (e.g. a generated slug) so every field shows them.
-            // Not keyed on updated_at: stock changes bump it and would clear unsaved edits here.
+            // Not keyed on stock: a stock change would clear unsaved edits here.
             key={JSON.stringify(initial)}
             action={updateProductAction.bind(null, product.id)}
             initial={initial}
+            sizeStock={Object.fromEntries(product.variants.map((variant) => [variant.id, variant.stock]))}
             categories={categories.map(({ id, name }) => ({ id, name }))}
             submitLabel="Save changes"
           />
@@ -113,9 +115,33 @@ export default async function EditProductPage({ params, searchParams }: PageProp
             Stock
           </h2>
           <p className="mt-2 mb-6 text-sm text-muted">
-            Shared across all sizes. Sales and expired orders change it automatically; record deliveries,
-            counts and losses here.
+            {sized ? "Each size has its own stock. " : ""}Sales and expired orders change it automatically;
+            record deliveries, counts and losses here.
           </p>
+          {sized && (
+            <div className="mb-8 overflow-x-auto">
+              <table className="table-data text-sm">
+                <thead>
+                  <tr>
+                    <th scope="col">Size</th>
+                    <th scope="col" className="text-right">
+                      In stock
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {product.variants.map((variant) => (
+                    <tr key={variant.id}>
+                      <td>{variant.label}</td>
+                      <td className={`text-right tabular-nums ${variant.stock === 0 ? "text-error" : ""}`}>
+                        {variant.stock === 0 ? "Sold out" : variant.stock}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
           {stockMessage && (
             <div className="mb-6">
               <SavedNotice>{stockMessage}</SavedNotice>
@@ -125,10 +151,10 @@ export default async function EditProductPage({ params, searchParams }: PageProp
             // A fresh form after each recorded change.
             key={history[0]?.id ?? 0}
             action={adjustStockAction.bind(null, product.id)}
-            stock={product.stock}
+            variants={product.variants}
           />
           <h3 className="mt-12 mb-2 label">History</h3>
-          <StockHistory entries={history} />
+          <StockHistory entries={history} sized={sized} />
         </div>
 
         <div className="mt-16 border-t pt-10" role="region" aria-labelledby="archive-heading">

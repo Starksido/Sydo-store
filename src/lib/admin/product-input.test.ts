@@ -41,9 +41,9 @@ describe("parseProductInput", () => {
       sku: " sy-w-24102 ",
       price: "318,500",
       sizes: [
-        { label: " S ", available: true },
-        { label: "", available: true },
-        { label: "M", available: false },
+        { id: "12", label: " S " },
+        { id: "", label: "" },
+        { id: "", label: "M" },
       ],
       gallery: `${IMAGE}\n\n  ${IMAGE}&h=1600  \n`,
       details: "100% silk\r\n\r\nDry clean only\n",
@@ -59,8 +59,8 @@ describe("parseProductInput", () => {
         description: "A fluid midi wrap dress.",
         price: 31_850_000,
         sizes: [
-          { label: "S", available: true },
-          { label: "M", available: false },
+          { id: 12, label: "S" },
+          { id: null, label: "M" },
         ],
         image: IMAGE,
         altImage: null,
@@ -72,8 +72,8 @@ describe("parseProductInput", () => {
   });
 
   it("stores no sizes as one-size, and keeps a slug that was given", () => {
-    const result = parseProductInput({ ...valid, slug: "wrap-dress", sizes: [{ label: " ", available: true }] });
-    expect(result).toMatchObject({ ok: true, input: { slug: "wrap-dress", sizes: null } });
+    const result = parseProductInput({ ...valid, slug: "wrap-dress", sizes: [{ id: "", label: " " }] });
+    expect(result).toMatchObject({ ok: true, input: { slug: "wrap-dress", sizes: [] } });
   });
 
   it("requires the name, SKU, category, description, price and main image", () => {
@@ -123,12 +123,20 @@ describe("parseProductInput", () => {
     expect(
       errorsFor({
         sizes: [
-          { label: "M", available: true },
-          { label: "m", available: false },
+          { id: "", label: "M" },
+          { id: "", label: "m" },
         ],
       }),
     ).toHaveProperty("sizes");
-    expect(errorsFor({ sizes: [{ label: "x".repeat(21), available: true }] })).toHaveProperty("sizes");
+    expect(
+      errorsFor({
+        sizes: [
+          { id: "4", label: "S" },
+          { id: "4", label: "M" },
+        ],
+      }),
+    ).toHaveProperty("sizes");
+    expect(errorsFor({ sizes: [{ id: "", label: "x".repeat(21) }] })).toHaveProperty("sizes");
     expect(errorsFor({ details: Array.from({ length: 21 }, (_, i) => `Line ${i}`).join("\n") })).toHaveProperty("details");
     expect(errorsFor({ gallery: Array(13).fill(IMAGE).join("\n") })).toHaveProperty("gallery");
     expect(errorsFor({ badge: "x".repeat(31) })).toHaveProperty("badge");
@@ -136,26 +144,40 @@ describe("parseProductInput", () => {
 });
 
 describe("readProductForm", () => {
-  it("reads size rows in row order, with unchecked rows unavailable", () => {
+  it("reads size rows in row order, with their saved ids", () => {
     const form = new FormData();
     form.set("name", "Dress");
     form.set("sizes.10.label", "L");
     form.set("sizes.2.label", "S");
-    form.set("sizes.2.available", "on");
+    form.set("sizes.2.id", "7");
     expect(readProductForm(form)).toMatchObject({
       name: "Dress",
       sku: "",
       sizes: [
-        { label: "S", available: true },
-        { label: "L", available: false },
+        { id: "7", label: "S" },
+        { id: "", label: "L" },
       ],
     });
   });
 
-  it("round-trips a stored product", () => {
+  it("round-trips a stored product with its sizes", () => {
+    const parsed = parseProductInput({
+      ...valid,
+      sizes: [
+        { id: "3", label: "S" },
+        { id: "5", label: "M" },
+      ],
+    });
+    if (!parsed.ok) throw new Error("valid product refused");
+    const { sizes, ...stored } = parsed.input;
+    const variants = sizes.map((size) => ({ id: size.id!, label: size.label }));
+    expect(parseProductInput(productFormValues({ ...stored, variants }))).toEqual(parsed);
+  });
+
+  it("shows a one-size product with no size rows", () => {
     const parsed = parseProductInput(valid);
     if (!parsed.ok) throw new Error("valid product refused");
-    expect(parseProductInput(productFormValues(parsed.input))).toEqual(parsed);
+    expect(productFormValues({ ...parsed.input, variants: [{ id: 9, label: null }] }).sizes).toEqual([]);
   });
 });
 
@@ -194,28 +216,31 @@ describe("helpers", () => {
 });
 
 describe("parseStockInput", () => {
-  const base = { mode: "add", quantity: "5", reason: "received", note: "", expected: "3" };
+  const base = { variantId: "8", mode: "add", quantity: "5", reason: "received", note: "", expected: "3" };
 
   it("turns add and remove into a relative change, and set into one checked against what was shown", () => {
     expect(parseStockInput({ ...base, note: " Invoice 42 " })).toEqual({
       ok: true,
-      input: { mode: "adjust", delta: 5, reason: "received", note: "Invoice 42" },
+      input: { variantId: 8, mode: "adjust", delta: 5, reason: "received", note: "Invoice 42" },
     });
     expect(parseStockInput({ ...base, mode: "remove", quantity: "1,000", reason: "damaged" })).toEqual({
       ok: true,
-      input: { mode: "adjust", delta: -1000, reason: "damaged", note: null },
+      input: { variantId: 8, mode: "adjust", delta: -1000, reason: "damaged", note: null },
     });
     expect(parseStockInput({ ...base, mode: "set", quantity: "0", reason: "correction" })).toEqual({
       ok: true,
-      input: { mode: "set", stock: 0, expected: 3, reason: "correction", note: null },
+      input: { variantId: 8, mode: "set", stock: 0, expected: 3, reason: "correction", note: null },
     });
   });
 
-  it("refuses bad modes, quantities, reasons and notes", () => {
+  it("refuses a missing size and bad modes, quantities, reasons and notes", () => {
     const errors = (values: Partial<typeof base>) => {
       const result = parseStockInput({ ...base, ...values });
       return result.ok ? {} : result.errors;
     };
+    for (const variantId of ["", "0", "x", "1.5"]) {
+      expect(errors({ variantId }), variantId).toHaveProperty("variantId");
+    }
     expect(errors({ mode: "double" })).toHaveProperty("mode");
     for (const quantity of ["", "0", "-1", "1.5", "abc", "1000001"]) {
       expect(errors({ quantity }), quantity).toHaveProperty("quantity");

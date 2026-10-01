@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { db } from "@/db";
-import { cartItems, products, stockAdjustments } from "@/db/schema";
+import { cartItems, products, productVariants, stockAdjustments } from "@/db/schema";
 import {
   createCategory,
   deleteCategory,
@@ -14,14 +14,14 @@ import {
 import type { ProductInput } from "@/lib/admin/product-input";
 import {
   countAdminProducts,
-  countLowStockProducts,
+  countLowStockVariants,
   createProduct,
   deleteProduct,
   escapeLike,
   getAdminProduct,
   isProductOrdered,
   listAdminProducts,
-  listLowStockProducts,
+  listLowStockVariants,
   setProductArchived,
   updateProduct,
 } from "@/lib/admin/products";
@@ -35,6 +35,8 @@ import {
   createProduct as createProductFixture,
   createUser,
   getStock,
+  getVariantId,
+  getVariantStock,
   resetCatalog,
   setStock,
 } from "../../../tests/fixtures";
@@ -52,7 +54,7 @@ function input(categoryId: number, overrides: Partial<ProductInput> = {}): Produ
     categoryId,
     description: "A fluid midi wrap dress.",
     price: 31_850_000,
-    sizes: [{ label: "S", available: true }],
+    sizes: [{ id: null, label: "S" }],
     image: IMAGE,
     altImage: null,
     gallery: [],
@@ -62,41 +64,56 @@ function input(categoryId: number, overrides: Partial<ProductInput> = {}): Produ
   };
 }
 
+/** A size row for a new size. */
+function newSize(label: string) {
+  return { id: null, label };
+}
+
 async function created(result: Awaited<ReturnType<typeof createProduct>>) {
   if (!result.ok) throw new Error(`createProduct: ${JSON.stringify(result.errors)}`);
   return result.id;
 }
 
 describe("createProduct / updateProduct", () => {
-  it("creates a product with no stock, on sale", async () => {
+  it("creates a product and its sizes with no stock, on sale", async () => {
     const categoryId = await createCategoryFixture();
-    const id = await created(await createProduct(input(categoryId)));
+    const { sizes, ...fields } = input(categoryId, { sizes: [newSize("S"), newSize("M")] });
+    const id = await created(await createProduct({ ...fields, sizes }));
 
     expect(await getAdminProduct(id)).toMatchObject({
-      ...input(categoryId),
+      ...fields,
+      variants: [
+        { label: "S", stock: 0 },
+        { label: "M", stock: 0 },
+      ],
       stock: 0,
       archivedAt: null,
       category: { name: expect.any(String) },
     });
   });
 
+  it("creates a one-size product as one variant with a null label", async () => {
+    const id = await created(await createProduct(input(await createCategoryFixture(), { sizes: [] })));
+    expect((await getAdminProduct(id))!.variants).toEqual([{ id: expect.any(Number), label: null, stock: 0 }]);
+  });
+
   it("updates every field but stock", async () => {
     const [a, b] = [await createCategoryFixture(), await createCategoryFixture()];
-    const id = await created(await createProduct(input(a)));
+    const id = await created(await createProduct(input(a, { sizes: [] })));
     await setStock(id, 7);
 
-    const changes = input(b, {
+    const { sizes, ...changes } = input(b, {
+      sizes: [],
       name: "Renamed",
       slug: "renamed",
       sku: "SY-NEW-1",
       price: 100,
-      sizes: null,
       altImage: IMAGE,
       gallery: [IMAGE],
       details: [],
       badge: "Sale",
     });
-    expect(await updateProduct(id, changes)).toEqual({ ok: true, id });
+    expect(await updateProduct(id, { ...changes, sizes })).toEqual({ ok: true, id });
     expect(await getAdminProduct(id)).toMatchObject({ ...changes, stock: 7 });
     expect(await getStock(id)).toBe(7);
   });
@@ -131,6 +148,115 @@ describe("createProduct / updateProduct", () => {
   });
 });
 
+describe("updateProduct sizes", () => {
+  /** A product with sizes S (stock 0) and M (stock 3). */
+  async function sized() {
+    const categoryId = await createCategoryFixture();
+    const id = await created(await createProduct(input(categoryId, { sizes: [newSize("S"), newSize("M")] })));
+    const [S, M] = [await getVariantId(id, "S"), await getVariantId(id, "M")];
+    await setStock(id, 3, "M");
+    return { categoryId, id, S, M };
+  }
+
+  const variantsOf = async (id: number) => (await getAdminProduct(id))!.variants;
+
+  it("renames, reorders and adds sizes, and removes those with no stock", async () => {
+    const { categoryId, id, M } = await sized();
+
+    const result = await updateProduct(id, input(categoryId, { sizes: [newSize("XS"), { id: M, label: "Medium" }] }));
+
+    expect(result).toEqual({ ok: true, id });
+    expect(await variantsOf(id)).toEqual([
+      { id: expect.any(Number), label: "XS", stock: 0 },
+      { id: M, label: "Medium", stock: 3 },
+    ]);
+  });
+
+  it("refuses, saving nothing, to remove a size that has stock", async () => {
+    const { categoryId, id, S, M } = await sized();
+
+    expect(await updateProduct(id, input(categoryId, { name: "Renamed", sizes: [{ id: S, label: "S" }] }))).toEqual({
+      ok: false,
+      errors: { sizes: "Set the stock of M (3) to 0 before removing it." },
+    });
+    expect((await getAdminProduct(id))!.name).toBe("Floral silk wrap dress");
+    expect((await variantsOf(id)).map((variant) => variant.id)).toEqual([S, M]);
+  });
+
+  it("keeps the size (and its stock) when a removed size is added back under the same name", async () => {
+    const { categoryId, id, S, M } = await sized();
+
+    expect(await updateProduct(id, input(categoryId, { sizes: [{ id: S, label: "S" }, newSize("m")] }))).toEqual({
+      ok: true,
+      id,
+    });
+    expect(await variantsOf(id)).toEqual([
+      { id: S, label: "S", stock: 0 },
+      { id: M, label: "m", stock: 3 },
+    ]);
+  });
+
+  it("switches between one size and sizes only when the stock being dropped is 0", async () => {
+    const categoryId = await createCategoryFixture();
+    const id = await created(await createProduct(input(categoryId, { sizes: [] })));
+    await setStock(id, 2);
+
+    expect(await updateProduct(id, input(categoryId))).toEqual({
+      ok: false,
+      errors: { sizes: "It has 2 in stock as a one-size item. Set its stock to 0 before adding sizes." },
+    });
+
+    await setStock(id, 0);
+    expect(await updateProduct(id, input(categoryId))).toEqual({ ok: true, id });
+    expect(await variantsOf(id)).toMatchObject([{ label: "S", stock: 0 }]);
+
+    expect(await updateProduct(id, input(categoryId, { sizes: [] }))).toEqual({ ok: true, id });
+    expect(await variantsOf(id)).toMatchObject([{ label: null, stock: 0 }]);
+  });
+
+  it("turns sizes that clash within one save into an error on sizes", async () => {
+    const { categoryId, id, S, M } = await sized();
+
+    expect(
+      await updateProduct(id, input(categoryId, { sizes: [{ id: S, label: "M" }, { id: M, label: "S" }] })),
+    ).toEqual({
+      ok: false,
+      errors: {
+        sizes: "These size changes clash with each other (e.g. two sizes swapping names). Save them in two steps.",
+      },
+    });
+    expect(await variantsOf(id)).toMatchObject([
+      { id: S, label: "S" },
+      { id: M, label: "M" },
+    ]);
+  });
+
+  it("treats the id of another product's size as a new size", async () => {
+    const { categoryId, id, S, M } = await sized();
+    const other = await getVariantId(await createProductFixture(4));
+
+    const sizes = [
+      { id: S, label: "S" },
+      { id: M, label: "M" },
+      { id: other, label: "L" },
+    ];
+    expect(await updateProduct(id, input(categoryId, { sizes }))).toEqual({ ok: true, id });
+    expect(await variantsOf(id)).toMatchObject([{ id: S }, { id: M }, { label: "L", stock: 0 }]);
+    expect(await getVariantStock(other)).toBe(4);
+  });
+
+  it("shows bag lines of a removed size as no longer available", async () => {
+    const { categoryId, id, S, M } = await sized();
+    const lineId = await createCartLine(await createUser(), id, 1, "S");
+
+    expect(await updateProduct(id, input(categoryId, { sizes: [{ id: M, label: "M" }] }))).toEqual({ ok: true, id });
+    expect(await db.select().from(productVariants).where(eq(productVariants.id, S))).toEqual([]);
+    expect(await db.select().from(cartItems).where(eq(cartItems.id, lineId))).toEqual([
+      expect.objectContaining({ productId: id, variantId: null, size: "S" }),
+    ]);
+  });
+});
+
 describe("setProductArchived", () => {
   it("archives and unarchives, keeping the first archive time", async () => {
     const id = await created(await createProduct(input(await createCategoryFixture())));
@@ -151,7 +277,8 @@ describe("deleteProduct", () => {
   it("deletes an archived product that was never ordered, with its stock history, keeping bag lines", async () => {
     const [adminId, customerId] = [await createUser(), await createUser()];
     const id = await createProductFixture(5);
-    await adjustStock({ productId: id, delta: 2, userId: adminId, reason: "received", note: null });
+    const variantId = await getVariantId(id);
+    await adjustStock({ productId: id, variantId, delta: 2, userId: adminId, reason: "received", note: null });
     const lineId = await createCartLine(customerId, id, 1);
 
     expect(await deleteProduct(id)).toEqual({ ok: false, reason: "not-archived" });
@@ -164,7 +291,7 @@ describe("deleteProduct", () => {
     expect(await getAdminProduct(id)).toBeUndefined();
     expect(await db.select().from(stockAdjustments)).toEqual([]);
     expect(await db.select().from(cartItems).where(eq(cartItems.id, lineId))).toEqual([
-      expect.objectContaining({ productId: null, productName: "Saved name", quantity: 1 }),
+      expect.objectContaining({ productId: null, variantId: null, productName: "Saved name", quantity: 1 }),
     ]);
     expect(await deleteProduct(id)).toEqual({ ok: false, reason: "not-found" });
   });
@@ -172,7 +299,8 @@ describe("deleteProduct", () => {
   it("refuses a product that was ordered, even when archived, and keeps its history", async () => {
     const [adminId, customerId] = [await createUser(), await createUser()];
     const id = await createProductFixture(5);
-    await adjustStock({ productId: id, delta: 1, userId: adminId, reason: "correction", note: null });
+    const variantId = await getVariantId(id);
+    await adjustStock({ productId: id, variantId, delta: 1, userId: adminId, reason: "correction", note: null });
     await createOrder(customerId, [[id, 1]]);
     await setProductArchived(id, true);
 
@@ -303,11 +431,11 @@ describe("categories", () => {
 });
 
 describe("low stock", () => {
-  it("lists products on sale at or below the threshold, lowest first, and counts them", async () => {
+  it("lists sizes on sale at or below the threshold, lowest first, and counts them", async () => {
     const categoryId = await createCategoryFixture();
     const make = async (slug: string, stock: number) => {
       const id = await created(await createProduct(input(categoryId, { name: slug, slug, sku: slug.toUpperCase() })));
-      await setStock(id, stock);
+      await setStock(id, stock, "S");
       return id;
     };
     const two = await make("two", 2);
@@ -316,12 +444,24 @@ describe("low stock", () => {
     await make("plenty", 4);
     const archived = await make("archived", 0);
     await setProductArchived(archived, true);
+    const mixed = await created(
+      await createProduct(
+        input(categoryId, { name: "mixed", slug: "mixed", sku: "MIXED", sizes: [newSize("S"), newSize("M")] }),
+      ),
+    );
+    await setStock(mixed, 5, "S");
+    await setStock(mixed, 1, "M");
+    const oneSize = await createProductFixture(1);
+    // Named to sort right after "mixed", which has the same stock.
+    await db.update(products).set({ name: "mixed one-size" }).where(eq(products.id, oneSize));
 
-    expect((await listLowStockProducts()).map((p) => [p.id, p.stock])).toEqual([
-      [out, 0],
-      [two, 2],
-      [three, 3],
+    expect((await listLowStockVariants()).map((v) => [v.product.id, v.label, v.stock])).toEqual([
+      [out, "S", 0],
+      [mixed, "M", 1],
+      [oneSize, null, 1],
+      [two, "S", 2],
+      [three, "S", 3],
     ]);
-    expect(await countLowStockProducts()).toEqual({ soldOut: 1, low: 2 });
+    expect(await countLowStockVariants()).toEqual({ soldOut: 1, low: 4 });
   });
 });

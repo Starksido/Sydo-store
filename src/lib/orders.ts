@@ -2,7 +2,8 @@
 // Not a Server Function on purpose: callers (the checkout action) check the session first.
 // neon-http has no interactive transactions, so placing an order is one SQL statement: it locks the
 // ordered cart lines, re-checks and takes the stock (the shared steps from `@/lib/stock`), creates
-// the order and its items from the locked product rows, and deletes those cart lines, all or none.
+// the order and its items from the locked size and product rows, and deletes those cart lines, all
+// or none.
 import { randomBytes } from "node:crypto";
 
 import { and, asc, desc, eq, isNotNull, sql } from "drizzle-orm";
@@ -17,16 +18,17 @@ import { stockDecrementCtes, stockIncrementCtes } from "@/lib/stock";
 export type CheckoutLine = { lineId: number; quantity: number };
 
 export type OrderShortage = {
-  productId: number;
+  variantId: number;
   name: string;
-  /** Total the order asked for, across sizes. */
+  /** Null for one-size items. */
+  size: string | null;
   requested: number;
   available: number;
 };
 
 export type PlaceOrderResult =
   | { ok: true; reference: string }
-  /** A line is gone, changed quantity or its product was deleted since checkout was rendered. */
+  /** A line is gone, changed quantity or its size or product was removed since checkout was rendered. */
   | { ok: false; reason: "cart-changed" }
   | { ok: false; reason: "out-of-stock"; shortages: OrderShortage[] };
 
@@ -93,8 +95,9 @@ export async function placeOrder(
   let rows: {
     line_id: number;
     matched: boolean;
-    product_id: number | null;
+    variant_id: number | null;
     name: string | null;
+    size: string | null;
     requested: number;
     available: number;
     reference: string | null;
@@ -108,30 +111,33 @@ export async function placeOrder(
       -- Locked in id order, like reconcileCart. A line deleted by a concurrent checkout drops out
       -- here once that commits, so the same lines can't be ordered twice.
       cart_lines as (
-        select ci.id, ci.product_id, ci.product_name, ci.size, ci.quantity
+        select ci.id, ci.variant_id, ci.product_name, ci.size, ci.quantity
         from cart_items ci
         join carts c on c.id = ci.cart_id
         where c.user_id = ${userId} and ci.id in (select line_id from snapshot)
         order by ci.id
         for update of ci
       ),
-      -- A line whose product was deleted or archived since checkout loaded doesn't match. The
-      -- archive check reads the latest committed row without locking it, so an archive that commits
-      -- while this statement runs may not be seen.
+      -- A line whose size or product was deleted, or whose product was archived, since checkout loaded
+      -- doesn't match. The archive check reads the latest committed row without locking it, so an
+      -- archive that commits while this statement runs may not be seen.
       matched as (
-        select s.line_id, s.quantity, cl.product_id, cl.product_name, cl.size,
+        select s.line_id, s.quantity, cl.variant_id, cl.product_name, cl.size,
           coalesce(
             cl.quantity = s.quantity
-              and exists (select 1 from products p where p.id = cl.product_id and p.archived_at is null),
+              and exists (
+                select 1 from product_variants v join products p on p.id = v.product_id
+                where v.id = cl.variant_id and p.archived_at is null
+              ),
             false
           ) as ok
         from snapshot s
         left join cart_lines cl on cl.id = s.line_id
       ),
-      -- One row per product. Lines that don't match collapse into a null product_id, which fails
-      -- the stock verdict, so nothing below runs.
+      -- One row per size. Lines that don't match collapse into a null variant_id, which fails the
+      -- stock verdict, so nothing below runs.
       req as (
-        select case when ok then product_id end as product_id, sum(quantity)::int as quantity
+        select case when ok then variant_id end as variant_id, sum(quantity)::int as quantity
         from matched
         group by 1
       ),
@@ -140,18 +146,18 @@ export async function placeOrder(
         insert into orders (reference, user_id, checkout_key, total, delivery_name, delivery_phone,
           delivery_county, delivery_town, delivery_address)
         select ${createReference()}, ${userId}, ${checkoutKey}::uuid,
-          (select sum(l.price::bigint * m.quantity) from matched m join locked l on l.id = m.product_id),
+          (select sum(l.price::bigint * m.quantity) from matched m join locked l on l.id = m.variant_id),
           ${delivery.fullName}, ${delivery.phone}, ${delivery.county}, ${delivery.town}, ${delivery.address}
         from verdict v
         where v.ok
         returning id, reference
       ),
       new_items as (
-        insert into order_items (order_id, product_id, product_name, sku, size, unit_price, quantity)
-        select o.id, l.id, l.name, l.sku, m.size, l.price, m.quantity
+        insert into order_items (order_id, product_id, variant_id, product_name, sku, size, unit_price, quantity)
+        select o.id, l.product_id, l.id, l.name, l.sku, l.label, l.price, m.quantity
         from new_order o
         cross join matched m
-        join locked l on l.id = m.product_id
+        join locked l on l.id = m.variant_id
         order by m.line_id
         returning id
       ),
@@ -160,12 +166,12 @@ export async function placeOrder(
         where id in (select id from cart_lines) and exists (select 1 from new_order)
         returning id
       )
-      select m.line_id, m.ok as matched, m.product_id, coalesce(l.name, m.product_name) as name,
-        coalesce(r.quantity, m.quantity)::int as requested, coalesce(l.stock, 0)::int as available,
-        (select reference from new_order) as reference
+      select m.line_id, m.ok as matched, m.variant_id, coalesce(l.name, m.product_name) as name,
+        coalesce(l.label, m.size) as size, coalesce(r.quantity, m.quantity)::int as requested,
+        coalesce(l.stock, 0)::int as available, (select reference from new_order) as reference
       from matched m
-      left join req r on r.product_id = m.product_id and m.ok
-      left join locked l on l.id = m.product_id
+      left join req r on r.variant_id = m.variant_id and m.ok
+      left join locked l on l.id = m.variant_id
       order by m.line_id
     `));
   } catch (error) {
@@ -188,10 +194,11 @@ export async function placeOrder(
 
   const shortages = new Map<number, OrderShortage>();
   for (const row of rows) {
-    if (row.available < row.requested && !shortages.has(row.product_id!)) {
-      shortages.set(row.product_id!, {
-        productId: row.product_id!,
+    if (row.available < row.requested && !shortages.has(row.variant_id!)) {
+      shortages.set(row.variant_id!, {
+        variantId: row.variant_id!,
         name: row.name!,
+        size: row.size,
         requested: row.requested,
         available: row.available,
       });
@@ -413,10 +420,10 @@ export async function changeOrderStatus({
       returning id
     ),
     restock_req as (
-      select oi.product_id, sum(oi.quantity)::int as quantity
+      select oi.variant_id, sum(oi.quantity)::int as quantity
       from order_items oi
-      where ${cancelling}::boolean and oi.order_id in (select id from upd) and oi.product_id is not null
-      group by oi.product_id
+      where ${cancelling}::boolean and oi.order_id in (select id from upd) and oi.variant_id is not null
+      group by oi.variant_id
     ),
     ${stockIncrementCtes()},
     refund as (

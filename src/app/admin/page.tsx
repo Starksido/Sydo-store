@@ -3,7 +3,7 @@ import Link from "next/link";
 
 import { listAdminCategories } from "@/lib/admin/categories";
 import { countOrderWork } from "@/lib/admin/orders";
-import { countAdminProducts, countLowStockProducts } from "@/lib/admin/products";
+import { countAdminProducts, countLowStockVariants } from "@/lib/admin/products";
 import { LOW_STOCK_THRESHOLD } from "@/lib/catalog";
 import { requireAdmin } from "@/lib/session";
 
@@ -18,7 +18,7 @@ export default async function AdminOverviewPage() {
   const { user } = await requireAdmin("/admin");
   const [productCounts, lowStock, categories, orderWork] = await Promise.all([
     countAdminProducts(),
-    countLowStockProducts(),
+    countLowStockVariants(),
     listAdminCategories(),
     countOrderWork(),
   ]);
@@ -44,8 +44,8 @@ export default async function AdminOverviewPage() {
       href: "/admin/stock",
       title: "Stock",
       stats: [
-        { label: "Sold out", value: lowStock.soldOut },
-        { label: `1–${LOW_STOCK_THRESHOLD} left`, value: lowStock.low },
+        { label: "Sizes sold out", value: lowStock.soldOut },
+        { label: `Sizes with 1–${LOW_STOCK_THRESHOLD} left`, value: lowStock.low },
       ],
     },
     { href: "/admin/categories", title: "Categories", stats: [{ label: "Total", value: categories.length }] },

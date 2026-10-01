@@ -189,13 +189,13 @@ export async function confirmPayment(reference: string): Promise<ConfirmPaymentR
       where id = ${attempt.orderId}
       for update
     ),
-    -- Only an expired order needs its stock back; a deleted product (null id) fails the verdict.
+    -- Only an expired order needs its stock back; a removed size (null id) fails the verdict.
     req as (
-      select oi.product_id, sum(oi.quantity)::int as quantity
+      select oi.variant_id, sum(oi.quantity)::int as quantity
       from order_items oi
       join o on o.id = oi.order_id
       where o.status = 'expired'
-      group by oi.product_id
+      group by oi.variant_id
     ),
     ${stockDecrementCtes()},
     paid as (
@@ -311,13 +311,13 @@ export async function expireUnpaidOrders({ limit = 100 }: { limit?: number } = {
       returning id
     ),
     restock_req as (
-      select oi.product_id, sum(oi.quantity)::int as quantity
+      select oi.variant_id, sum(oi.quantity)::int as quantity
       from order_items oi
-      where oi.order_id in (select id from expired) and oi.product_id is not null
-      group by oi.product_id
+      where oi.order_id in (select id from expired) and oi.variant_id is not null
+      group by oi.variant_id
     ),
     ${stockIncrementCtes()}
-    select reference, (select count(*) from restock_upd)::int as restocked_products
+    select reference, (select count(*) from restock_upd)::int as restocked_variants
     from expired
     order by reference
   `);

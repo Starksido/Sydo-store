@@ -1,16 +1,19 @@
 // Loads the sample catalog into the database. Safe to re-run: it only adds categories and products
 // whose slug is missing, and never changes existing ones (admins may have edited them).
 // Run with: npm run db:seed
-import { inArray } from "drizzle-orm";
+import { inArray, sql } from "drizzle-orm";
 
 import { unsplash } from "../lib/catalog";
 import { db } from "./index";
-import { categories, products, type ProductSize } from "./schema";
+import { categories, products } from "./schema";
 
 type SeedCategory = typeof categories.$inferInsert;
 type SeedProduct = Omit<typeof products.$inferInsert, "categoryId" | "createdAt"> & {
   category: string;
-};
+} & (
+    | { /** One-size item. */ stock: number; sizes?: never }
+    | { /** Label and stock of each size, in display order. */ sizes: [label: string, stock: number][]; stock?: never }
+  );
 
 const seedCategories: SeedCategory[] = [
   { slug: "women", name: "Women", position: 0, image: unsplash("1595777457583-95e059d581b8", 900) },
@@ -26,9 +29,6 @@ const seedCategories: SeedCategory[] = [
   { slug: "shoes", name: "Shoes", position: 4, image: null },
 ];
 
-const apparelSizes = (unavailable: string[] = []): ProductSize[] =>
-  ["XS", "S", "M", "L", "XL"].map((label) => ({ label, available: !unavailable.includes(label) }));
-
 // Newest first: this order becomes the New Arrivals order.
 const seedProducts: SeedProduct[] = [
   {
@@ -37,8 +37,13 @@ const seedProducts: SeedProduct[] = [
     name: "Biker jacket in black leather",
     category: "men",
     price: 37_570_000,
-    stock: 6,
-    sizes: ["46", "48", "50", "52", "54"].map((label) => ({ label, available: label !== "52" })),
+    sizes: [
+      ["46", 2],
+      ["48", 2],
+      ["50", 1],
+      ["52", 0],
+      ["54", 1],
+    ],
     image: unsplash("1520975954732-35dd22299614", 1200),
     altImage: unsplash("1551028719-00167b16eac5", 1200, { x: 0.45, y: 0.75, zoom: 1.5 }),
     gallery: [
@@ -62,8 +67,13 @@ const seedProducts: SeedProduct[] = [
     name: "Floral silk wrap dress",
     category: "women",
     price: 31_850_000,
-    stock: 2,
-    sizes: apparelSizes(["XS", "XL"]),
+    sizes: [
+      ["XS", 0],
+      ["S", 1],
+      ["M", 1],
+      ["L", 0],
+      ["XL", 0],
+    ],
     image: unsplash("1496747611176-843222e1e57c", 1200),
     gallery: [
       unsplash("1496747611176-843222e1e57c", 1200, { x: 0.35, y: 0.3, zoom: 2 }),
@@ -98,8 +108,13 @@ const seedProducts: SeedProduct[] = [
     name: "Satin jogger trousers",
     category: "women",
     price: 12_740_000,
-    stock: 12,
-    sizes: apparelSizes(),
+    sizes: [
+      ["XS", 2],
+      ["S", 3],
+      ["M", 3],
+      ["L", 2],
+      ["XL", 2],
+    ],
     image: unsplash("1594633312681-425c7b97ccd1", 1200),
     gallery: [
       unsplash("1594633312681-425c7b97ccd1", 1200, { x: 0.4, y: 0.22, zoom: 2.2 }),
@@ -122,8 +137,13 @@ const seedProducts: SeedProduct[] = [
     name: "Floral satin pump",
     category: "shoes",
     price: 11_640_000,
-    stock: 5,
-    sizes: ["36", "37", "38", "39", "40"].map((label) => ({ label, available: label !== "36" })),
+    sizes: [
+      ["36", 0],
+      ["37", 1],
+      ["38", 2],
+      ["39", 1],
+      ["40", 1],
+    ],
     image: unsplash("1543163521-1bf539c55dd2", 1200),
     gallery: [unsplash("1543163521-1bf539c55dd2", 1200, { x: 0.45, y: 0.7, zoom: 2 })],
     description:
@@ -141,8 +161,14 @@ const seedProducts: SeedProduct[] = [
     name: "Colour-block trainer",
     category: "shoes",
     price: 10_270_000,
-    stock: 9,
-    sizes: ["40", "41", "42", "43", "44", "45"].map((label) => ({ label, available: true })),
+    sizes: [
+      ["40", 1],
+      ["41", 2],
+      ["42", 2],
+      ["43", 2],
+      ["44", 1],
+      ["45", 1],
+    ],
     image: unsplash("1560769629-975ec94e6a86", 1200),
     gallery: [unsplash("1560769629-975ec94e6a86", 1200, { x: 0.65, y: 0.6, zoom: 2 })],
     description:
@@ -194,7 +220,10 @@ const seedProducts: SeedProduct[] = [
   },
 ];
 
-/** Adds the missing sample categories and products. Returns how many of each it added. */
+/**
+ * Adds the missing sample categories, and the missing products with their sizes (variants). Returns
+ * how many categories and products it added.
+ */
 export async function seedCatalog() {
   const addedCategories = await db
     .insert(categories)
@@ -209,16 +238,40 @@ export async function seedCatalog() {
 
   // One hour apart, newest first, for a stable New Arrivals order.
   const newest = Date.UTC(2026, 8, 1);
-  const productRows = seedProducts.map(({ category, ...product }, index) => {
+  const productRows: (typeof products.$inferInsert)[] = [];
+  const variantRows: { slug: string; label: string | null; stock: number; position: number }[] = [];
+  for (const [index, { category, stock, sizes, ...product }] of seedProducts.entries()) {
     const categoryId = categoryIds.get(category);
     if (!categoryId) throw new Error(`Unknown category "${category}" for ${product.slug}`);
-    return { ...product, categoryId, createdAt: new Date(newest - index * 60 * 60 * 1000) };
-  });
-  const addedProducts = await db
-    .insert(products)
-    .values(productRows)
-    .onConflictDoNothing({ target: products.slug })
-    .returning({ id: products.id });
+    productRows.push({ ...product, categoryId, createdAt: new Date(newest - index * 60 * 60 * 1000) });
+    if (sizes) {
+      for (const [position, [label, sizeStock]] of sizes.entries()) {
+        variantRows.push({ slug: product.slug, label, stock: sizeStock, position });
+      }
+    } else {
+      variantRows.push({ slug: product.slug, label: null, stock, position: 0 });
+    }
+  }
+  // One statement, so a product is never added without its sizes.
+  const { rows: addedProducts } = await db.execute<{ id: number }>(sql`
+    with added as (
+      ${db
+        .insert(products)
+        .values(productRows)
+        .onConflictDoNothing({ target: products.slug })
+        .returning({ id: products.id, slug: products.slug })
+        .getSQL()}
+    ),
+    variants as (
+      insert into product_variants (product_id, label, stock, position)
+      select a.id, v.label, v.stock, v.position
+      from added a
+      join jsonb_to_recordset(${JSON.stringify(variantRows)}::jsonb) as v(slug text, label text, stock int, position int)
+        on v.slug = a.slug
+      returning id
+    )
+    select id from added
+  `);
 
   return { categories: addedCategories.length, products: addedProducts.length };
 }

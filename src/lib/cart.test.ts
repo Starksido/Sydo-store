@@ -1,10 +1,22 @@
 // Runs against the test database only (see tests/test-env.ts).
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { db } from "@/db";
+import { productVariants } from "@/db/schema";
 import { setProductArchived } from "@/lib/admin/products";
-import { addCartItem, getCart, getCartProduct, reconcileCart, setCartItemQuantity } from "@/lib/cart";
+import { addCartItem, getCart, getCartVariant, reconcileCart, setCartItemQuantity } from "@/lib/cart";
 
-import { createCartLine, createProduct, createUser, getCartQuantities, resetCatalog, setStock } from "../../tests/fixtures";
+import {
+  createCartLine,
+  createProduct,
+  createSizedProduct,
+  createUser,
+  getCartQuantities,
+  getVariantId,
+  resetCatalog,
+  setStock,
+} from "../../tests/fixtures";
 
 beforeEach(resetCatalog);
 
@@ -22,15 +34,24 @@ describe("reconcileCart", () => {
     expect(lines[0]).toMatchObject({ quantity: 2, available: 2 });
   });
 
-  it("shares stock across sizes in line order", async () => {
+  it("limits each size by its own stock", async () => {
     const userId = await createUser();
-    const a = await createProduct(10);
+    const { productId: a } = await createSizedProduct([
+      ["M", 10],
+      ["L", 10],
+    ]);
     const m = await createCartLine(userId, a, 2, "M");
     const l = await createCartLine(userId, a, 3, "L");
-    await setStock(a, 4);
+    await setStock(a, 2, "L");
 
     expect(await reconcileCart(userId)).toEqual(new Set([l]));
     expect(await getCartQuantities(userId)).toEqual({ [m]: 2, [l]: 2 });
+
+    const { lines } = await getCart(userId);
+    expect(lines).toMatchObject([
+      { id: m, size: "M", available: 2, maxQuantity: 10, product: { stock: 10 } },
+      { id: l, size: "L", available: 2, maxQuantity: 2, product: { stock: 2 } },
+    ]);
   });
 
   it("keeps sold-out lines, unchanged, as sold out", async () => {
@@ -47,19 +68,25 @@ describe("reconcileCart", () => {
     expect(count).toBe(0);
   });
 
-  it("gives a size nothing when the product's other sizes in the bag hold all its stock", async () => {
+  it("shows a line whose size was removed as no longer available, and leaves it alone", async () => {
     const userId = await createUser();
-    const a = await createProduct(5);
+    const { productId: a, variants } = await createSizedProduct([
+      ["M", 0],
+      ["L", 5],
+    ]);
     const m = await createCartLine(userId, a, 2, "M");
     const l = await createCartLine(userId, a, 1, "L");
-    await setStock(a, 2);
+    await db.delete(productVariants).where(eq(productVariants.id, variants.M));
 
     expect(await reconcileCart(userId)).toEqual(new Set());
     expect(await getCartQuantities(userId)).toEqual({ [m]: 2, [l]: 1 });
-
-    // The bag shows "Already in your bag in another size" for this: nothing available, stock left.
-    const { lines } = await getCart(userId);
-    expect(lines[1]).toMatchObject({ id: l, available: 0, product: { stock: 2 } });
+    const { lines, count } = await getCart(userId);
+    expect(lines).toMatchObject([
+      { id: m, product: null, name: "Saved name", size: "M", available: 0, maxQuantity: 0 },
+      { id: l, available: 1 },
+    ]);
+    expect(count).toBe(1);
+    expect(await setCartItemQuantity(userId, m, 1)).toBe(false);
   });
 
   it("leaves lines that stock still covers, and other users' carts, alone", async () => {
@@ -77,11 +104,48 @@ describe("reconcileCart", () => {
   });
 });
 
+describe("addCartItem and setCartItemQuantity", () => {
+  it("merge adds of a size into one line, within that size's stock only", async () => {
+    const userId = await createUser();
+    const { variants } = await createSizedProduct([
+      ["S", 2],
+      ["M", 1],
+    ]);
+
+    expect(await addCartItem(userId, variants.S, 1)).toBe(true);
+    expect(await addCartItem(userId, variants.S, 1)).toBe(true);
+    expect(await addCartItem(userId, variants.S, 1)).toBe(false);
+    // Another size has its own stock, whatever the bag holds of the first.
+    expect(await addCartItem(userId, variants.M, 1)).toBe(true);
+    expect(await addCartItem(userId, variants.M, 1)).toBe(false);
+
+    const { lines } = await getCart(userId);
+    expect(lines).toMatchObject([
+      { size: "S", quantity: 2, available: 2 },
+      { size: "M", quantity: 1, available: 1 },
+    ]);
+    expect(await setCartItemQuantity(userId, lines[0].id, 3)).toBe(false);
+    expect(await setCartItemQuantity(userId, lines[0].id, 1)).toBe(true);
+    expect(await setCartItemQuantity(userId, lines[1].id, 2)).toBe(false);
+  });
+
+  it("refuse a size that's sold out or doesn't exist", async () => {
+    const userId = await createUser();
+    const { variants } = await createSizedProduct([["S", 0]]);
+
+    expect(await addCartItem(userId, variants.S, 1)).toBe(false);
+    expect(await addCartItem(userId, 999_999, 1)).toBe(false);
+    expect(await getCartVariant(999_999)).toBeUndefined();
+    expect(await getCartVariant(variants.S)).toMatchObject({ label: "S", stock: 0 });
+  });
+});
+
 describe("archived products in the cart", () => {
   it("show as no longer available, can't be added or raised, and come back when unarchived", async () => {
     const userId = await createUser();
     const a = await createProduct(5);
     const b = await createProduct(5);
+    const variantA = await getVariantId(a);
     const archivedLine = await createCartLine(userId, a, 2);
     const keptLine = await createCartLine(userId, b, 1);
     await setProductArchived(a, true);
@@ -94,8 +158,8 @@ describe("archived products in the cart", () => {
     expect(count).toBe(1);
     expect(subtotal).toBe(1000);
 
-    expect(await getCartProduct(a)).toBeUndefined();
-    expect(await addCartItem(userId, a, null, 1)).toBe(false);
+    expect(await getCartVariant(variantA)).toBeUndefined();
+    expect(await addCartItem(userId, variantA, 1)).toBe(false);
     expect(await setCartItemQuantity(userId, archivedLine, 1)).toBe(false);
     // Stock dropping below the saved quantity doesn't touch an archived product's line.
     await setStock(a, 1);
@@ -105,6 +169,6 @@ describe("archived products in the cart", () => {
     await setStock(a, 5);
     await setProductArchived(a, false);
     expect((await getCart(userId)).lines[0]).toMatchObject({ id: archivedLine, available: 2, product: { id: a } });
-    expect(await addCartItem(userId, a, null, 1)).toBe(true);
+    expect(await addCartItem(userId, variantA, 1)).toBe(true);
   });
 });

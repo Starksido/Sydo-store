@@ -93,8 +93,9 @@ export async function placeOrderAction(_: PlaceOrderState, formData: FormData): 
     status: "error",
     values,
     message: "Some items are no longer available in the quantity you chose. Nothing has been ordered.",
-    items: result.shortages.map(({ name, available }) =>
-      available === 0 ? `${name}: sold out` : `${name}: only ${available} available`,
-    ),
+    items: result.shortages.map(({ name, size, available }) => {
+      const item = size ? `${name}, size ${size}` : name;
+      return available === 0 ? `${item}: sold out` : `${item}: only ${available} available`;
+    }),
   };
 }

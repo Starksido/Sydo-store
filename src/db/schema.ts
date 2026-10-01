@@ -8,7 +8,6 @@ import {
   date,
   index,
   integer,
-  jsonb,
   pgEnum,
   pgTable,
   text,
@@ -21,11 +20,6 @@ import {
 import { user } from "./auth-schema";
 
 export * from "./auth-schema";
-
-export type ProductSize = {
-  label: string;
-  available: boolean;
-};
 
 export const categories = pgTable("categories", {
   id: integer().primaryKey().generatedAlwaysAsIdentity(),
@@ -49,10 +43,6 @@ export const products = pgTable(
     description: text().notNull(),
     /** Price in KES cents, always whole shillings (a multiple of 100; see the check below). */
     price: integer().notNull(),
-    /** Units in stock across all sizes. 0 means sold out. */
-    stock: integer().notNull().default(0),
-    /** Null for one-size items. */
-    sizes: jsonb().$type<ProductSize[]>(),
     image: text().notNull(),
     altImage: text("alt_image"),
     gallery: text().array().notNull().default(sql`'{}'::text[]`),
@@ -76,7 +66,32 @@ export const products = pgTable(
     check("products_price_nonnegative", sql`${table.price} >= 0`),
     // Whole shillings: M-Pesa only takes whole shillings.
     check("products_price_whole_shillings", sql`${table.price} % 100 = 0`),
-    check("products_stock_nonnegative", sql`${table.stock} >= 0`),
+  ],
+);
+
+/**
+ * What a product is sold in: one row per size, or a single row with a null label for a one-size
+ * product. Stock is held here, per size; a product's stock is the sum of its variants. Stock is
+ * only changed by `@/lib/stock`. A size can be removed only while its stock is 0.
+ */
+export const productVariants = pgTable(
+  "product_variants",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    productId: integer("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    /** Null for the one variant of a one-size product. */
+    label: text(),
+    /** Units in stock. 0 means this size is sold out. */
+    stock: integer().notNull().default(0),
+    /** Display order of the sizes. */
+    position: integer().notNull().default(0),
+  },
+  (table) => [
+    // One variant per size, case-insensitively; one-size products have exactly one (null label).
+    uniqueIndex("product_variants_label_unique").on(table.productId, sql`coalesce(lower(${table.label}), '')`),
+    check("product_variants_stock_nonnegative", sql`${table.stock} >= 0`),
   ],
 );
 
@@ -98,6 +113,13 @@ export const stockAdjustments = pgTable(
     id: integer().primaryKey().generatedAlwaysAsIdentity(),
     /** Null once the product has been deleted. */
     productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
+    /**
+     * The size changed. Null once the size has been removed, and on changes made before stock was
+     * kept per size, which were to the product's total.
+     */
+    variantId: integer("variant_id").references(() => productVariants.id, { onDelete: "set null" }),
+    /** The size's label at the time (null for one-size products and changes to the total). */
+    size: text(),
     /** The admin who made the change. */
     userId: text("user_id")
       .notNull()
@@ -111,6 +133,7 @@ export const stockAdjustments = pgTable(
   },
   (table) => [
     index("stock_adjustments_product_id_created_at_idx").on(table.productId, table.createdAt),
+    index("stock_adjustments_variant_id_idx").on(table.variantId),
     check("stock_adjustments_delta_nonzero", sql`${table.delta} <> 0`),
     check("stock_adjustments_new_stock_nonnegative", sql`${table.newStock} >= 0`),
     check("stock_adjustments_delta_matches", sql`${table.newStock} = ${table.previousStock} + ${table.delta}`),
@@ -133,10 +156,9 @@ export const carts = pgTable("carts", {
 });
 
 /**
- * One row per product and size. No price column: prices are always read from `products`.
- * Quantities for all sizes of a product together may not exceed `products.stock`; writes in
- * `@/lib/cart` enforce this. When a product is deleted its rows stay, with `product_id` null,
- * so the cart can tell the user it was removed.
+ * One row per size (variant). No price column: prices are always read from `products`. A line's
+ * quantity may not exceed its size's stock; writes in `@/lib/cart` enforce this. When a product or
+ * size is deleted its rows stay, with `variant_id` null, so the cart can tell the user it was removed.
  */
 export const cartItems = pgTable(
   "cart_items",
@@ -149,6 +171,8 @@ export const cartItems = pgTable(
     productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
     /** Name when added, shown in the removed-item notice. Not kept in sync; never a price. */
     productName: text("product_name").notNull(),
+    /** Null once the size (or the product) has been removed; the line then shows as removed. */
+    variantId: integer("variant_id").references(() => productVariants.id, { onDelete: "set null" }),
     /** Null for one-size items. */
     size: text(),
     quantity: integer().notNull(),
@@ -159,12 +183,12 @@ export const cartItems = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [
-    // One row per product and size (one-size items included, via coalesce). Rows for deleted
-    // products are left out, so several of them in one cart can't collide on null.
-    uniqueIndex("cart_items_line_unique")
-      .on(table.cartId, table.productId, sql`coalesce(${table.size}, '')`)
-      .where(sql`${table.productId} is not null`),
+    // One row per size. Rows for removed sizes are left out, so several can't collide on null.
+    uniqueIndex("cart_items_variant_unique")
+      .on(table.cartId, table.variantId)
+      .where(sql`${table.variantId} is not null`),
     index("cart_items_product_id_idx").on(table.productId),
+    index("cart_items_variant_id_idx").on(table.variantId),
     check("cart_items_quantity_positive", sql`${table.quantity} > 0`),
   ],
 );
@@ -253,6 +277,8 @@ export const orderItems = pgTable(
       .references(() => orders.id, { onDelete: "cascade" }),
     productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
     productName: text("product_name").notNull(),
+    /** The size ordered, for returning stock on cancel or expiry. Null once the size is removed. */
+    variantId: integer("variant_id").references(() => productVariants.id, { onDelete: "set null" }),
     sku: text().notNull(),
     /** Null for one-size items. */
     size: text(),
@@ -263,6 +289,7 @@ export const orderItems = pgTable(
   (table) => [
     index("order_items_order_id_idx").on(table.orderId),
     index("order_items_product_id_idx").on(table.productId),
+    index("order_items_variant_id_idx").on(table.variantId),
     check("order_items_quantity_positive", sql`${table.quantity} > 0`),
     check("order_items_unit_price_nonnegative", sql`${table.unitPrice} >= 0`),
   ],
@@ -396,11 +423,16 @@ export const categoriesRelations = relations(categories, ({ many }) => ({
   products: many(products),
 }));
 
-export const productsRelations = relations(products, ({ one }) => ({
+export const productsRelations = relations(products, ({ one, many }) => ({
   category: one(categories, {
     fields: [products.categoryId],
     references: [categories.id],
   }),
+  variants: many(productVariants),
+}));
+
+export const productVariantsRelations = relations(productVariants, ({ one }) => ({
+  product: one(products, { fields: [productVariants.productId], references: [products.id] }),
 }));
 
 export const cartsRelations = relations(carts, ({ one, many }) => ({

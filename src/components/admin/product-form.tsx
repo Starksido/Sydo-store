@@ -12,11 +12,13 @@ type Props = {
   action: (state: ProductFormState, formData: FormData) => Promise<ProductFormState>;
   /** The saved product's values, or empty for a new one. */
   initial: ProductFormValues;
+  /** Stock of each saved size, by id. */
+  sizeStock?: Record<string, number>;
   categories: { id: number; name: string }[];
   submitLabel: string;
 };
 
-export function ProductForm({ action, initial, categories, submitLabel }: Props) {
+export function ProductForm({ action, initial, sizeStock, categories, submitLabel }: Props) {
   const [state, submit, pending] = useActionState(action, { status: "idle" });
 
   // After a failed save, show what was submitted: React resets the form after its action.
@@ -81,10 +83,11 @@ export function ProductForm({ action, initial, categories, submitLabel }: Props)
       </Field>
 
       <SizeRows
-        // React resets the form after a failed save, putting checkboxes back to their defaults. Keyed
-        // by the submitted sizes, the rows remount with them as the default, so the reset keeps them.
+        // React resets the form after a failed save, putting inputs back to their defaults. Keyed by
+        // the submitted sizes, the rows remount with them as the default, so the reset keeps them.
         key={JSON.stringify(values.sizes)}
         defaultValue={values.sizes}
+        stock={sizeStock}
         error={errors.sizes}
       />
 

@@ -13,7 +13,7 @@ import {
   type StockField,
   type StockFormValues,
 } from "@/lib/admin/product-input";
-import { createProduct, deleteProduct, setProductArchived, updateProduct } from "@/lib/admin/products";
+import { createProduct, deleteProduct, getAdminProduct, setProductArchived, updateProduct } from "@/lib/admin/products";
 import { requireAdmin } from "@/lib/session";
 import { adjustStock, setStockTo } from "@/lib/stock";
 
@@ -89,8 +89,8 @@ export async function deleteProductAction(id: unknown): Promise<void> {
 }
 
 /**
- * Why a stock change wasn't made. `current` is the stock now, when it differs from what the page
- * showed (a sale or another admin got there first); the form shows it and uses it next time.
+ * Why a stock change wasn't made. `current` is the size's stock now, when it differs from what the
+ * page showed (a sale or another admin got there first); the form shows it and uses it next time.
  */
 export type StockFormState =
   | { status: "idle" }
@@ -101,6 +101,12 @@ export type StockFormState =
       message?: string;
       current?: number;
     };
+
+/** A stock change that found no such size: a 404 if the product is gone, else the size was removed. */
+async function sizeGone(productId: number, values: StockFormValues): Promise<StockFormState> {
+  if (!(await getAdminProduct(productId))) notFound();
+  return { status: "error", values, errors: { variantId: "That size no longer exists. Reload the page." } };
+}
 
 /** Bound to the product's id by the edit page. */
 export async function adjustStockAction(
@@ -118,19 +124,19 @@ export async function adjustStockAction(
     return { status: "error", values, errors, message: stale };
   }
 
-  const { reason, note } = parsed.input;
-  const meta = { productId, reason, note, userId: user.id };
+  const { variantId, reason, note } = parsed.input;
+  const meta = { productId, variantId, reason, note, userId: user.id };
   if (parsed.input.mode === "adjust") {
     const result = await adjustStock({ ...meta, delta: parsed.input.delta });
     if (!result.ok) {
-      if (result.reason === "not-found") notFound();
+      if (result.reason === "not-found") return sizeGone(productId, values);
       const errors = { quantity: `There are only ${result.current} in stock, so you can remove at most ${result.current}.` };
       return { status: "error", values, errors, current: result.current };
     }
   } else {
     const result = await setStockTo({ ...meta, stock: parsed.input.stock, expected: parsed.input.expected });
     if (!result.ok) {
-      if (result.reason === "not-found") notFound();
+      if (result.reason === "not-found") return sizeGone(productId, values);
       const message = `Stock changed to ${result.current} since this page loaded, probably from a sale. Nothing was saved: check the number and try again.`;
       return { status: "error", values, errors: {}, message, current: result.current };
     }

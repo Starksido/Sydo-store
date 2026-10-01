@@ -11,10 +11,7 @@ export const metadata: Metadata = { title: "Shopping bag" };
 
 function lineNotice(line: CartLine, adjusted: boolean) {
   if (!line.product) return "No longer available.";
-  if (line.available === 0) {
-    // Stock left but none for this line: the product's other sizes in the bag hold all of it.
-    return line.product.stock > 0 ? "Already in your bag in another size." : "Sold out.";
-  }
+  if (line.available === 0) return "Sold out.";
   if (adjusted) return `Only ${line.available} available. Quantity updated.`;
   // Stock changed between the update and the read; the next visit updates the quantity.
   if (line.available < line.quantity) return `Only ${line.available} available.`;

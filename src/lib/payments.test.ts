@@ -7,7 +7,15 @@ import { products } from "@/db/schema";
 import { setProductArchived } from "@/lib/admin/products";
 import { confirmPayment, expireUnpaidOrders, MAX_PAYMENT_ATTEMPTS, startPayment } from "@/lib/payments";
 
-import { createProduct, createUser, getStock, resetCatalog, setStock } from "../../tests/fixtures";
+import {
+  createProduct,
+  createSizedProduct,
+  createUser,
+  getStock,
+  getVariantStock,
+  resetCatalog,
+  setStock,
+} from "../../tests/fixtures";
 import { ageOrder, agePayments, createOrder, getOrderRow, getPayments, setOrderStatus } from "../../tests/orders";
 import { mockPaystack } from "../../tests/paystack-mock";
 
@@ -281,9 +289,12 @@ describe("confirmPayment", () => {
 });
 
 describe("expireUnpaidOrders", () => {
-  it("expires orders unpaid after 60 minutes and returns their stock, across sizes", async () => {
+  it("expires orders unpaid after 60 minutes and returns their stock, to each size", async () => {
     const userId = await createUser();
-    const coat = await createProduct(5);
+    const { productId: coat, variants } = await createSizedProduct([
+      ["M", 2],
+      ["L", 3],
+    ]);
     const scarf = await createProduct(4);
     const old = await createOrder(userId, [
       [coat, 1, "M"],
@@ -303,6 +314,7 @@ describe("expireUnpaidOrders", () => {
     expect((await getOrderRow(recent)).status).toBe("pending_payment");
     expect((await getOrderRow(paid)).status).toBe("paid");
     expect([await getStock(coat), await getStock(scarf)]).toEqual([5, 2]);
+    expect([await getVariantStock(variants.M), await getVariantStock(variants.L)]).toEqual([2, 3]);
     expect(await expireUnpaidOrders()).toEqual([]);
     expect([await getStock(coat), await getStock(scarf)]).toEqual([5, 2]);
   });

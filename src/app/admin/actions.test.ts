@@ -15,10 +15,28 @@ import {
 } from "@/app/admin/products/actions";
 import { setUserRoleAction } from "@/app/admin/users/actions";
 import { db } from "@/db";
-import { categories, orderEvents, orders, payments, products, roleChanges, stockAdjustments, user } from "@/db/schema";
+import {
+  categories,
+  orderEvents,
+  orders,
+  payments,
+  products,
+  productVariants,
+  roleChanges,
+  stockAdjustments,
+  user,
+} from "@/db/schema";
 import { requireAdmin } from "@/lib/session";
 
-import { createCategory, createProduct, createUser, getStock, resetCatalog, setStock } from "../../../tests/fixtures";
+import {
+  createCategory,
+  createProduct,
+  createUser,
+  getStock,
+  getVariantId,
+  resetCatalog,
+  setStock,
+} from "../../../tests/fixtures";
 import { createOrder, getOrderRow, setOrderStatus } from "../../../tests/orders";
 import { mockResend } from "../../../tests/resend-mock";
 
@@ -63,8 +81,8 @@ function productForm(categoryId: number, overrides: Record<string, string> = {})
     description: "A fluid midi wrap dress.",
     price: "318500",
     image: IMAGE,
+    "sizes.0.id": "",
     "sizes.0.label": "S",
-    "sizes.0.available": "on",
     ...overrides,
   };
   for (const [key, value] of Object.entries(fields)) form.set(key, value);
@@ -91,6 +109,7 @@ function stockForm(fields: Record<string, string>) {
 async function snapshot() {
   const { rows } = await db.execute(sql`
     select (select coalesce(json_agg(p order by p.id), '[]') from products p) as products,
+      (select coalesce(json_agg(v order by v.id), '[]') from product_variants v) as variants,
       (select coalesce(json_agg(c order by c.id), '[]') from categories c) as categories,
       (select coalesce(json_agg(s order by s.id), '[]') from stock_adjustments s) as adjustments,
       (select coalesce(json_agg(o order by o.id), '[]') from orders o) as orders,
@@ -141,7 +160,10 @@ describe("admin Server Functions", () => {
       /^REDIRECT \/admin\/products\/\d+\?saved=1$/,
     );
     const [row] = await db.select().from(products);
-    expect(row).toMatchObject({ slug: "floral-silk-wrap-dress", sku: "SY-W-24102", price: 31_850_000, stock: 0 });
+    expect(row).toMatchObject({ slug: "floral-silk-wrap-dress", sku: "SY-W-24102", price: 31_850_000 });
+    expect(await db.select({ label: productVariants.label, stock: productVariants.stock }).from(productVariants)).toEqual([
+      { label: "S", stock: 0 },
+    ]);
     expect(vi.mocked(revalidatePath).mock.calls).toEqual([
       ["/"],
       ["/collections/new-in"],
@@ -157,7 +179,7 @@ describe("admin Server Functions", () => {
 
     expect(await createProductAction(idle, form)).toEqual({
       status: "invalid",
-      values: expect.objectContaining({ price: "12.50", sizes: [{ label: "S", available: true }] }),
+      values: expect.objectContaining({ price: "12.50", sizes: [{ id: "", label: "S" }] }),
       errors: { price: expect.any(String), image: expect.any(String) },
     });
     expect(await db.select().from(products)).toEqual([]);
@@ -169,14 +191,21 @@ describe("admin Server Functions", () => {
     const productId = await createProduct(5);
     const [{ categoryId }] = await db.select({ categoryId: products.categoryId }).from(products);
 
-    await expect(updateProductAction(productId, idle, productForm(categoryId, { name: "Renamed" }))).rejects.toThrow(
+    // A one-size product with stock can't take sizes, so the form keeps it one-size.
+    const oneSize = { name: "Renamed", "sizes.0.label": "" };
+    expect(await updateProductAction(productId, idle, productForm(categoryId, { name: "Renamed" }))).toMatchObject({
+      status: "invalid",
+      errors: { sizes: expect.stringContaining("Set its stock to 0") },
+    });
+    await expect(updateProductAction(productId, idle, productForm(categoryId, oneSize))).rejects.toThrow(
       `REDIRECT /admin/products/${productId}?saved=1`,
     );
     await expect(setProductArchivedAction(productId, true)).rejects.toThrow(
       `REDIRECT /admin/products/${productId}?saved=archived`,
     );
     const [row] = await db.select().from(products).where(eq(products.id, productId));
-    expect(row).toMatchObject({ name: "Renamed", stock: 5, archivedAt: expect.any(Date) });
+    expect(row).toMatchObject({ name: "Renamed", archivedAt: expect.any(Date) });
+    expect(await getStock(productId)).toBe(5);
 
     for (const id of [999_999, "1", -1, 1.5]) {
       await expect(updateProductAction(id, idle, productForm(categoryId))).rejects.toThrow("NOT_FOUND");
@@ -258,8 +287,10 @@ describe("admin Server Functions", () => {
     const adminId = await createUser();
     signedInAsAdmin(adminId);
     const productId = await createProduct(5);
+    const variantId = String(await getVariantId(productId));
+    const form = (fields: Record<string, string>) => stockForm({ variantId, ...fields });
 
-    await expect(adjustStockAction(productId, idle, stockForm({ note: "Invoice 7" }))).rejects.toThrow(
+    await expect(adjustStockAction(productId, idle, form({ note: "Invoice 7" }))).rejects.toThrow(
       `REDIRECT /admin/products/${productId}?saved=stock#stock`,
     );
     expect(await getStock(productId)).toBe(8);
@@ -268,7 +299,7 @@ describe("admin Server Functions", () => {
     ]);
     expect(revalidatePath).toHaveBeenCalled();
 
-    expect(await adjustStockAction(productId, idle, stockForm({ mode: "remove", quantity: "9", reason: "damaged" }))).toEqual({
+    expect(await adjustStockAction(productId, idle, form({ mode: "remove", quantity: "9", reason: "damaged" }))).toEqual({
       status: "error",
       values: expect.objectContaining({ quantity: "9" }),
       errors: { quantity: "There are only 8 in stock, so you can remove at most 8." },
@@ -278,20 +309,24 @@ describe("admin Server Functions", () => {
     // "Set to" checks against the stock the page showed: a sale in between makes it stale.
     await setStock(productId, 6);
     expect(
-      await adjustStockAction(productId, idle, stockForm({ mode: "set", quantity: "20", reason: "correction", expected: "8" })),
+      await adjustStockAction(productId, idle, form({ mode: "set", quantity: "20", reason: "correction", expected: "8" })),
     ).toMatchObject({ status: "error", current: 6, message: expect.stringContaining("Stock changed to 6") });
     await expect(
-      adjustStockAction(productId, idle, stockForm({ mode: "set", quantity: "6", reason: "correction", expected: "6" })),
+      adjustStockAction(productId, idle, form({ mode: "set", quantity: "6", reason: "correction", expected: "6" })),
     ).rejects.toThrow(`REDIRECT /admin/products/${productId}?saved=stock-same#stock`);
     expect(await getStock(productId)).toBe(6);
     expect(await db.select().from(stockAdjustments)).toHaveLength(1);
 
-    expect(await adjustStockAction(productId, idle, stockForm({ quantity: "0", reason: "" }))).toMatchObject({
+    expect(await adjustStockAction(productId, idle, form({ quantity: "0", reason: "" }))).toMatchObject({
       status: "error",
       errors: { quantity: expect.any(String), reason: expect.any(String) },
     });
-    await expect(adjustStockAction(999_999, idle, stockForm({}))).rejects.toThrow("NOT_FOUND");
-    await expect(adjustStockAction("1", idle, stockForm({}))).rejects.toThrow("NOT_FOUND");
+    expect(await adjustStockAction(productId, idle, form({ variantId: "999999" }))).toMatchObject({
+      status: "error",
+      errors: { variantId: "That size no longer exists. Reload the page." },
+    });
+    await expect(adjustStockAction(999_999, idle, form({}))).rejects.toThrow("NOT_FOUND");
+    await expect(adjustStockAction("1", idle, form({}))).rejects.toThrow("NOT_FOUND");
   });
   it("refuse customers order changes, tracking and refunds, writing nothing", async () => {
     const reference = await createOrder(await createUser(), [[await createProduct(5), 1]]);

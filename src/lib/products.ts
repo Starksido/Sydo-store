@@ -1,12 +1,19 @@
 // Product and category queries for the storefront. Server-only: this module imports the database
 // client. Archived products are left out everywhere, as if they didn't exist.
-import { and, asc, desc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull, ne, sql, type SQL } from "drizzle-orm";
 import { cache } from "react";
 
 import { db } from "@/db";
-import { categories, products, type ProductSize } from "@/db/schema";
+import { categories, products, productVariants } from "@/db/schema";
 
-export type { ProductSize };
+/** A size the product is sold in, with its own stock. One-size products have one, labelled null. */
+export type ProductVariant = {
+  id: number;
+  /** Null for the one variant of a one-size product. */
+  label: string | null;
+  /** 0 means this size is sold out. */
+  stock: number;
+};
 
 export type Product = {
   id: number;
@@ -16,10 +23,10 @@ export type Product = {
   category: { slug: string; name: string };
   /** Price in KES cents (whole shillings). */
   price: number;
-  /** Units in stock across all sizes. 0 means sold out. */
+  /** Units in stock across all sizes (the sum of `variants`). 0 means sold out. */
   stock: number;
-  /** Omitted for one-size items. */
-  sizes?: ProductSize[];
+  /** The sizes in display order, or one variant with a null label for a one-size product. */
+  variants: ProductVariant[];
   image: string;
   /** Optional second image, shown on hover in listings. */
   altImage?: string;
@@ -38,9 +45,17 @@ export type Category = {
 
 type ProductRow = typeof products.$inferSelect & {
   category: { slug: string; name: string };
+  variants: ProductVariant[];
 };
 
-const withCategory = { category: { columns: { slug: true, name: true } } } as const;
+const withCategory = {
+  category: { columns: { slug: true, name: true } },
+  variants: {
+    columns: { id: true, label: true, stock: true },
+    // Not readonly (`as const` would make it so), which the query's types require.
+    orderBy: [asc(productVariants.position), asc(productVariants.id)] as SQL[],
+  },
+} as const;
 
 const onSale = isNull(products.archivedAt);
 
@@ -52,8 +67,8 @@ function toProduct(row: ProductRow): Product {
     name: row.name,
     category: row.category,
     price: row.price,
-    stock: row.stock,
-    sizes: row.sizes ?? undefined,
+    stock: row.variants.reduce((sum, variant) => sum + variant.stock, 0),
+    variants: row.variants,
     image: row.image,
     altImage: row.altImage ?? undefined,
     gallery: row.gallery,
@@ -89,18 +104,17 @@ export async function getNewArrivals(limit = 8) {
 
 /** Same-category products first, then the rest, excluding the product itself. */
 export async function getRelatedProducts(product: Product, limit = 4) {
-  const rows = await db
-    .select({ product: products, category: { slug: categories.slug, name: categories.name } })
-    .from(products)
-    .innerJoin(categories, eq(products.categoryId, categories.id))
-    .where(and(ne(products.id, product.id), onSale))
-    .orderBy(
-      sql`${categories.slug} = ${product.category.slug} desc`,
-      desc(products.createdAt),
-      desc(products.id),
-    )
-    .limit(limit);
-  return rows.map((row) => toProduct({ ...row.product, category: row.category }));
+  const rows = await db.query.products.findMany({
+    where: and(ne(products.id, product.id), onSale),
+    with: withCategory,
+    orderBy: (p) => [
+      sql`${p.categoryId} = (select id from categories where slug = ${product.category.slug}) desc`,
+      desc(p.createdAt),
+      desc(p.id),
+    ],
+    limit,
+  });
+  return rows.map(toProduct);
 }
 
 export async function getCategorySlugs() {

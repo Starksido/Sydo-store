@@ -13,9 +13,12 @@ import { getOrderForUser, listOrdersForUser, placeOrder, type CheckoutLine } fro
 import {
   createCartLine,
   createProduct,
+  createSizedProduct,
   createUser,
   getCartQuantities,
   getStock,
+  getVariantId,
+  getVariantStock,
   resetCatalog,
   setStock,
 } from "../../tests/fixtures";
@@ -58,7 +61,13 @@ beforeEach(resetCatalog);
 describe("placeOrder", () => {
   it("creates the order from product prices, takes the stock and clears the ordered lines", async () => {
     const userId = await createUser();
-    const coat = await createProduct(5, 3_757_000);
+    const { productId: coat, variants } = await createSizedProduct(
+      [
+        ["M", 2],
+        ["L", 3],
+      ],
+      3_757_000,
+    );
     const scarf = await createProduct(2, 520_000);
     const m = await createCartLine(userId, coat, 1, "M");
     const l = await createCartLine(userId, coat, 2, "L");
@@ -84,11 +93,12 @@ describe("placeOrder", () => {
     });
     const coatName = await productName(coat);
     expect(placed!.items).toMatchObject([
-      { productId: coat, productName: coatName, size: "M", unitPrice: 3_757_000, quantity: 1 },
-      { productId: coat, productName: coatName, size: "L", unitPrice: 3_757_000, quantity: 2 },
+      { productId: coat, variantId: variants.M, productName: coatName, size: "M", unitPrice: 3_757_000, quantity: 1 },
+      { productId: coat, variantId: variants.L, productName: coatName, size: "L", unitPrice: 3_757_000, quantity: 2 },
       { productId: scarf, productName: await productName(scarf), size: null, unitPrice: 520_000, quantity: 1 },
     ]);
-    expect(await getStock(coat)).toBe(2);
+    expect(await getVariantStock(variants.M)).toBe(1);
+    expect(await getVariantStock(variants.L)).toBe(1);
     expect(await getStock(scarf)).toBe(1);
     expect(await getCartQuantities(userId)).toEqual({});
   });
@@ -134,7 +144,7 @@ describe("placeOrder", () => {
     expect(result).toEqual({
       ok: false,
       reason: "out-of-stock",
-      shortages: [{ productId: b, name: await productName(b), requested: 2, available: 1 }],
+      shortages: [{ variantId: await getVariantId(b), name: await productName(b), size: null, requested: 2, available: 1 }],
     });
     expect(await getStock(a)).toBe(5);
     expect(await getStock(b)).toBe(1);
@@ -142,12 +152,15 @@ describe("placeOrder", () => {
     expect(await orderCount()).toBe(0);
   });
 
-  it("checks stock across sizes of the same product", async () => {
+  it("checks each size against its own stock, naming the short size", async () => {
     const userId = await createUser();
-    const a = await createProduct(4);
+    const { productId: a, variants } = await createSizedProduct([
+      ["M", 2],
+      ["L", 2],
+    ]);
     const m = await createCartLine(userId, a, 2, "M");
     const l = await createCartLine(userId, a, 2, "L");
-    await setStock(a, 3);
+    await setStock(a, 1, "L");
 
     expect(
       await order(userId, [
@@ -157,9 +170,19 @@ describe("placeOrder", () => {
     ).toEqual({
       ok: false,
       reason: "out-of-stock",
-      shortages: [{ productId: a, name: await productName(a), requested: 4, available: 3 }],
+      shortages: [{ variantId: variants.L, name: await productName(a), size: "L", requested: 2, available: 1 }],
     });
-    expect(await getStock(a)).toBe(3);
+    expect(await getVariantStock(variants.M)).toBe(2);
+    expect(await getVariantStock(variants.L)).toBe(1);
+  });
+
+  it("refuses a line whose size was removed as a changed cart", async () => {
+    const userId = await createUser();
+    const { productId: a } = await createSizedProduct([["M", 2]]);
+    const line = await createCartLine(userId, a, 1, "XL");
+
+    expect(await order(userId, [{ lineId: line, quantity: 1 }])).toEqual({ ok: false, reason: "cart-changed" });
+    expect(await orderCount()).toBe(0);
   });
 
   it("refuses, changing nothing, when the cart no longer matches the checkout", async () => {
@@ -286,7 +309,7 @@ describe("placeOrder duplicate protection", () => {
       {
         ok: false,
         reason: "out-of-stock",
-        shortages: [{ productId: a, name: await productName(a), requested: 1, available: 0 }],
+        shortages: [{ variantId: await getVariantId(a), name: await productName(a), size: null, requested: 1, available: 0 }],
       },
     ]);
     expect(await getStock(a)).toBe(0);

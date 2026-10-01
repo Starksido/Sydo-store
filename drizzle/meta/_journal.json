@@ -92,6 +92,20 @@
       "when": 1790793558157,
       "tag": "0012_confirm_existing_emails",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1790838399654,
+      "tag": "0013_product_variants",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790838454699,
+      "tag": "0014_drop_product_stock",
+      "breakpoints": true
     }
   ]
 }

@@ -12,47 +12,112 @@ const MODES: { value: StockMode; label: string; quantity: string }[] = [
   { value: "set", label: "Set to", quantity: "New stock level" },
 ];
 
+type Variant = { id: number; label: string | null; stock: number };
+
 type Props = {
   action: (state: StockFormState, formData: FormData) => Promise<StockFormState>;
-  /** Stock when the page loaded. "Set to" only applies if it's still this. */
-  stock: number;
+  /**
+   * The product's sizes with their stock when the page loaded, or its one variant (null label) for a
+   * one-size item. "Set to" only applies if the size's stock is still this.
+   */
+  variants: Variant[];
 };
 
-export function StockForm({ action, stock }: Props) {
+export function StockForm({ action, variants }: Props) {
   const [state, submit, pending] = useActionState(action, { status: "idle" });
 
-  // After a refused change, show (and check against) the stock the server reported.
-  const current = state.status === "error" && state.current !== undefined ? state.current : stock;
   const values = state.status === "error" ? state.values : undefined;
+  const errors = state.status === "error" ? state.errors : {};
   const mode = MODES.find((m) => m.value === values?.mode)?.value ?? "add";
 
   return (
     // A function `action` keeps the form from natively submitting before hydration.
     <form action={submit} noValidate className="space-y-6">
-      <p className="flex items-baseline gap-3">
-        <span className="label text-muted">In stock</span>
-        <span className={`text-xl tabular-nums ${current === 0 ? "text-error" : ""}`}>{current}</span>
-      </p>
       {state.status === "error" && state.message && (
         <p role="alert" className="border border-error p-4 text-sm text-error">
           {state.message}
         </p>
       )}
-      <input type="hidden" name="expected" value={current} />
+
+      <SizeAndStock
+        // React resets the form after a refused change. Keyed by the submitted size, this remounts
+        // with it selected, so the reset keeps it.
+        key={values?.variantId ?? ""}
+        variants={variants}
+        initialId={values?.variantId ?? ""}
+        // After a refused change, show (and check against) the stock the server reported.
+        reported={state.status === "error" ? state.current : undefined}
+        error={errors.variantId}
+      />
 
       <StockFields
-        // React resets the form after a refused change, putting inputs back to their defaults. Keyed
-        // by the submitted mode, these remount with it as the default, so the reset keeps what was sent.
+        // Likewise keyed by the submitted mode, so the radios keep it.
         key={mode}
         initialMode={mode}
         values={values}
-        errors={state.status === "error" ? state.errors : {}}
+        errors={errors}
       />
 
       <button type="submit" disabled={pending} className="btn btn-primary w-full sm:w-auto">
         {pending ? "Saving…" : "Update stock"}
       </button>
     </form>
+  );
+}
+
+function SizeAndStock({
+  variants,
+  initialId,
+  reported,
+  error,
+}: {
+  variants: Variant[];
+  initialId: string;
+  reported?: number;
+  error?: string;
+}) {
+  const oneSize = variants.length === 1 && variants[0].label === null;
+  const [selectedId, setSelectedId] = useState(oneSize ? String(variants[0].id) : initialId);
+  const selected = variants.find((variant) => String(variant.id) === selectedId);
+  // The server's figure belongs to the size that was submitted, which is the one selected on mount.
+  const current = selected && selectedId === initialId && reported !== undefined ? reported : selected?.stock;
+
+  return (
+    <>
+      {oneSize ? (
+        <input type="hidden" name="variantId" value={selectedId} />
+      ) : (
+        <Field id="variantId" label="Size" error={error}>
+          {/* Uncontrolled, so the form reset can't leave it out of step with `selectedId`. */}
+          <select
+            {...fieldProps("variantId", { error })}
+            defaultValue={initialId}
+            onChange={(event) => setSelectedId(event.target.value)}
+            required
+            className="input"
+          >
+            <option value="">Choose a size</option>
+            {variants.map((variant) => (
+              <option key={variant.id} value={variant.id}>
+                {variant.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      {oneSize && error && (
+        <p role="alert" className="field-error">
+          {error}
+        </p>
+      )}
+      {current !== undefined && (
+        <p className="flex items-baseline gap-3">
+          <span className="label text-muted">In stock{selected?.label ? `, size ${selected.label}` : ""}</span>
+          <span className={`text-xl tabular-nums ${current === 0 ? "text-error" : ""}`}>{current}</span>
+        </p>
+      )}
+      <input type="hidden" name="expected" value={current ?? ""} />
+    </>
   );
 }
 

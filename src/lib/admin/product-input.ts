@@ -1,6 +1,11 @@
 // Parses and validates the admin product and category forms. No database access, so the client-side
 // forms can import the types and `isUnsplashUrl`. Uniqueness (slug, SKU) is checked by the database.
-import type { ProductSize } from "@/db/schema";
+
+/** A size row as submitted: `id` is the saved size's (variant's) id, or "" for a new size. */
+export type SizeRowValues = { id: string; label: string };
+
+/** A size to keep (`id`, renamed to `label`) or to add (`id` null), in display order. */
+export type SizeInput = { id: number | null; label: string };
 
 /** Form fields as submitted, kept as strings so a form that fails validation can be shown again. */
 export type ProductFormValues = {
@@ -11,7 +16,7 @@ export type ProductFormValues = {
   description: string;
   /** Whole shillings, e.g. "375700". */
   price: string;
-  sizes: ProductSize[];
+  sizes: SizeRowValues[];
   image: string;
   altImage: string;
   /** One URL per line. */
@@ -23,7 +28,7 @@ export type ProductFormValues = {
 
 export type ProductField = keyof ProductFormValues;
 
-/** What `createProduct` / `updateProduct` store. Stock isn't part of it. */
+/** What `createProduct` / `updateProduct` store. Stock isn't part of it: sizes start at 0. */
 export type ProductInput = {
   name: string;
   slug: string;
@@ -32,8 +37,8 @@ export type ProductInput = {
   description: string;
   /** KES cents, whole shillings. */
   price: number;
-  /** Null for one-size items. */
-  sizes: ProductSize[] | null;
+  /** In display order. Empty for a one-size item. */
+  sizes: SizeInput[];
   image: string;
   altImage: string | null;
   gallery: string[];
@@ -107,7 +112,7 @@ function lines(value: string) {
     .filter(Boolean);
 }
 
-/** Reads the product form. Size rows are `sizes.<n>.label` / `sizes.<n>.available`, in row order. */
+/** Reads the product form. Size rows are `sizes.<n>.id` / `sizes.<n>.label`, in row order. */
 export function readProductForm(formData: FormData): ProductFormValues {
   const rows = new Set<number>();
   for (const key of formData.keys()) {
@@ -117,8 +122,8 @@ export function readProductForm(formData: FormData): ProductFormValues {
   const sizes = [...rows]
     .sort((a, b) => a - b)
     .map((row) => ({
+      id: text(formData, `sizes.${row}.id`).slice(0, 20),
       label: text(formData, `sizes.${row}.label`).slice(0, 100),
-      available: formData.get(`sizes.${row}.available`) === "on",
     }));
 
   return {
@@ -180,12 +185,15 @@ export function parseProductInput(values: ProductFormValues): ParseResult<Produc
   }
 
   const sizes = values.sizes
-    .map((size) => ({ label: size.label.trim(), available: size.available }))
+    .map((size) => ({ id: parseId(size.id), label: size.label.trim() }))
     .filter((size) => size.label);
   const labels = new Set(sizes.map((size) => size.label.toLowerCase()));
+  const ids = sizes.flatMap((size) => (size.id ? [size.id] : []));
   if (sizes.length > MAX_SIZES) errors.sizes = `Use ${MAX_SIZES} sizes or fewer.`;
   else if (sizes.some((size) => size.label.length > 20)) errors.sizes = "Keep each size to 20 characters or fewer.";
-  else if (labels.size !== sizes.length) errors.sizes = "Each size can only be listed once.";
+  else if (labels.size !== sizes.length || new Set(ids).size !== ids.length) {
+    errors.sizes = "Each size can only be listed once.";
+  }
 
   const image = values.image.trim();
   if (!image) errors.image = "Enter the main image URL.";
@@ -215,7 +223,7 @@ export function parseProductInput(values: ProductFormValues): ParseResult<Produc
       categoryId: categoryId!,
       description,
       price: shillings * 100,
-      sizes: sizes.length > 0 ? sizes : null,
+      sizes,
       image,
       altImage: altImage || null,
       gallery,
@@ -225,8 +233,10 @@ export function parseProductInput(values: ProductFormValues): ParseResult<Produc
   };
 }
 
-/** The form values for an existing product. */
-export function productFormValues(product: ProductInput): ProductFormValues {
+/** The form values for an existing product, with its sizes (variants) in display order. */
+export function productFormValues(
+  product: Omit<ProductInput, "sizes"> & { variants: { id: number; label: string | null }[] },
+): ProductFormValues {
   return {
     name: product.name,
     slug: product.slug,
@@ -234,7 +244,9 @@ export function productFormValues(product: ProductInput): ProductFormValues {
     categoryId: String(product.categoryId),
     description: product.description,
     price: String(product.price / 100),
-    sizes: product.sizes ?? [],
+    sizes: product.variants.flatMap((variant) =>
+      variant.label === null ? [] : [{ id: String(variant.id), label: variant.label }],
+    ),
     image: product.image,
     altImage: product.altImage ?? "",
     gallery: product.gallery.join("\n"),
@@ -298,11 +310,11 @@ export type StockReason = (typeof STOCK_REASONS)[number]["value"];
 
 export type StockMode = "add" | "remove" | "set";
 
-export type StockFormValues = { mode: string; quantity: string; reason: string; note: string };
+export type StockFormValues = { variantId: string; mode: string; quantity: string; reason: string; note: string };
 
 export type StockField = keyof StockFormValues;
 
-export type StockInput = { reason: StockReason; note: string | null } & (
+export type StockInput = { variantId: number; reason: StockReason; note: string | null } & (
   | { mode: "adjust"; delta: number }
   | { mode: "set"; stock: number; expected: number }
 );
@@ -311,6 +323,7 @@ const MAX_STOCK = 1_000_000;
 
 export function readStockForm(formData: FormData): StockFormValues & { expected: string } {
   return {
+    variantId: text(formData, "variantId"),
     mode: text(formData, "mode"),
     quantity: text(formData, "quantity"),
     reason: text(formData, "reason"),
@@ -327,6 +340,9 @@ export function parseStockInput(
   values: StockFormValues & { expected: string },
 ): ParseResult<StockInput, StockField | "expected"> {
   const errors: FieldErrors<StockField | "expected"> = {};
+
+  const variantId = parseId(values.variantId);
+  if (!variantId) errors.variantId = "Choose a size.";
 
   const mode = (["add", "remove", "set"] as const).find((m) => m === values.mode);
   if (!mode) errors.mode = "Choose add, remove or set.";
@@ -350,7 +366,7 @@ export function parseStockInput(
   if (mode === "set" && !(expected <= MAX_STOCK)) errors.expected = "Reload the page and try again.";
 
   if (Object.keys(errors).length > 0) return { ok: false, errors };
-  const meta = { reason: reason!, note: note || null };
+  const meta = { variantId: variantId!, reason: reason!, note: note || null };
   return {
     ok: true,
     input:

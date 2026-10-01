@@ -63,13 +63,8 @@ export default async function CheckoutPage() {
                   <ul className="mt-2 space-y-1">
                     {excluded.map((line) => (
                       <li key={line.id}>
-                        {line.name} (
-                        {!line.product
-                          ? "no longer available"
-                          : line.product.stock > 0
-                            ? "already in your bag in another size"
-                            : "sold out"}
-                        )
+                        {line.name}
+                        {line.size ? `, size ${line.size}` : ""} ({line.product ? "sold out" : "no longer available"})
                       </li>
                     ))}
                   </ul>
