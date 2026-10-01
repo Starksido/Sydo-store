@@ -36,7 +36,9 @@ const PLACEHOLDER_ORIGIN = "https://sydo.invalid";
 /**
  * Only same-origin paths, so `?next=` can't send users to another site. `next` is resolved the way
  * a browser would (which drops tabs and newlines and reads `\` as `/`, so `/<tab>/evil.com` means
- * `//evil.com`) and refused unless it stays on our origin.
+ * `//evil.com`) and refused unless it stays on our origin. The resolved path is refused too if it
+ * starts with `//`: dot segments can collapse into one (`/.//evil.com` resolves to `//evil.com`),
+ * which a browser would read as another site.
  */
 export function safeRedirect(next: unknown) {
   if (typeof next !== "string" || !next.startsWith("/")) return DEFAULT_REDIRECT;
@@ -46,6 +48,6 @@ export function safeRedirect(next: unknown) {
   } catch {
     return DEFAULT_REDIRECT;
   }
-  if (url.origin !== PLACEHOLDER_ORIGIN) return DEFAULT_REDIRECT;
+  if (url.origin !== PLACEHOLDER_ORIGIN || url.pathname.startsWith("//")) return DEFAULT_REDIRECT;
   return `${url.pathname}${url.search}${url.hash}`;
 }

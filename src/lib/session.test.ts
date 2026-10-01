@@ -10,6 +10,7 @@ describe("safeRedirect", () => {
     expect(safeRedirect("/account")).toBe("/account");
     expect(safeRedirect("/checkout?step=2#delivery")).toBe("/checkout?step=2#delivery");
     expect(safeRedirect("/orders/SY-7K4Q9M2X")).toBe("/orders/SY-7K4Q9M2X");
+    expect(safeRedirect("/products/../cart")).toBe("/cart");
   });
 
   it("refuses anything a browser would send to another site", () => {
@@ -25,6 +26,11 @@ describe("safeRedirect", () => {
       " //evil.com",
       "javascript:alert(1)",
       "evil.com",
+      // Dot segments that collapse into a leading // once resolved.
+      "/.//evil.com",
+      "/a/..//evil.com",
+      "/%2e//evil.com",
+      "/./\\evil.com",
     ]) {
       expect(safeRedirect(next), JSON.stringify(next)).toBe("/account");
     }
