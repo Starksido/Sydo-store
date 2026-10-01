@@ -4,6 +4,7 @@
 import { relations, sql } from "drizzle-orm";
 import {
   bigint,
+  boolean,
   check,
   date,
   index,
@@ -260,6 +261,53 @@ export const reviews = pgTable(
   ],
 );
 
+export const discountKind = pgEnum("discount_kind", ["percent", "fixed"]);
+
+/**
+ * Discount codes, managed on /admin/discounts. `placeOrder` checks a code and takes a redemption in
+ * the same statement that creates the order; the expiry sweep gives it back. `value` is a whole
+ * percent (1–100) for `percent`, or KES cents in whole shillings for `fixed`. A code that's been
+ * used can't be deleted (orders refer to it), only deactivated.
+ */
+export const discountCodes = pgTable(
+  "discount_codes",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    /** Stored upper-case; matched case-insensitively. */
+    code: text().notNull(),
+    kind: discountKind().notNull(),
+    value: integer().notNull(),
+    /** Smallest order subtotal it applies to, in KES cents. 0 = any. */
+    minSubtotal: bigint("min_subtotal", { mode: "number" }).notNull().default(0),
+    startsAt: timestamp("starts_at", { withTimezone: true }),
+    endsAt: timestamp("ends_at", { withTimezone: true }),
+    /** Null = unlimited. */
+    maxRedemptions: integer("max_redemptions"),
+    /** Orders holding the code, not counting expired ones. A late payment can push it past the limit. */
+    redemptions: integer().notNull().default(0),
+    oncePerCustomer: boolean("once_per_customer").notNull().default(false),
+    active: boolean().notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex("discount_codes_code_unique").on(sql`upper(${table.code})`),
+    check("discount_codes_value_positive", sql`${table.value} > 0`),
+    check(
+      "discount_codes_value_by_kind",
+      sql`(${table.kind} = 'percent' and ${table.value} <= 100) or (${table.kind} = 'fixed' and ${table.value} % 100 = 0)`,
+    ),
+    check("discount_codes_min_subtotal", sql`${table.minSubtotal} >= 0 and ${table.minSubtotal} % 100 = 0`),
+    check("discount_codes_redemptions_nonnegative", sql`${table.redemptions} >= 0`),
+    check("discount_codes_max_redemptions_positive", sql`${table.maxRedemptions} > 0`),
+    check("discount_codes_window", sql`${table.endsAt} > ${table.startsAt}`),
+    check("discount_codes_code_format", sql`${table.code} ~ '^[A-Z0-9][A-Z0-9-]{2,31}$'`),
+  ],
+);
+
 export const orderStatus = pgEnum("order_status", [
   "pending_payment",
   "paid",
@@ -299,7 +347,14 @@ export const orders = pgTable(
     checkoutKey: uuid("checkout_key").notNull(),
     status: orderStatus().notNull().default("pending_payment"),
     /** Sum of the items, in KES cents, calculated from product prices on the server. */
+    subtotal: bigint({ mode: "number" }).notNull(),
+    /** Taken off by the discount code, in KES cents (whole shillings). */
+    discount: bigint({ mode: "number" }).notNull().default(0),
+    /** What the customer pays: `subtotal - discount`, at least KES 1. */
     total: bigint({ mode: "number" }).notNull(),
+    discountCodeId: integer("discount_code_id").references(() => discountCodes.id, { onDelete: "restrict" }),
+    /** The code as it was when the order was placed. */
+    discountCode: text("discount_code"),
     deliveryName: text("delivery_name").notNull(),
     /** Normalised to +254XXXXXXXXX. */
     deliveryPhone: text("delivery_phone").notNull(),
@@ -324,7 +379,10 @@ export const orders = pgTable(
     unique("orders_user_checkout_key_unique").on(table.userId, table.checkoutKey),
     index("orders_user_id_created_at_idx").on(table.userId, table.createdAt),
     index("orders_status_created_at_idx").on(table.status, table.createdAt),
+    index("orders_discount_code_id_idx").on(table.discountCodeId),
     check("orders_total_nonnegative", sql`${table.total} >= 0`),
+    check("orders_discount_nonnegative", sql`${table.discount} >= 0`),
+    check("orders_total_matches", sql`${table.total} = ${table.subtotal} - ${table.discount}`),
     check("orders_cancel_reason_iff_cancelled", sql`(${table.status} = 'cancelled') = (${table.cancelReason} is not null)`),
     check("orders_shipping_carrier_length", sql`char_length(${table.shippingCarrier}) <= 100`),
     check("orders_tracking_number_length", sql`char_length(${table.trackingNumber}) <= 100`),

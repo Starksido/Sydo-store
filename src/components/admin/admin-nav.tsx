@@ -12,6 +12,7 @@ const sections = [
   { label: "Orders", href: "/admin/orders" },
   { label: "Refunds", href: "/admin/refunds" },
   { label: "Reviews", href: "/admin/reviews" },
+  { label: "Discounts", href: "/admin/discounts" },
   { label: "Users", href: "/admin/users" },
 ];
 

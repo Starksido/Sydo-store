@@ -60,6 +60,9 @@ describe("sendEmail", () => {
 
 const order: OrderEmailData = {
   reference: "SY-7K4Q9M2X",
+  subtotal: 1_140_000,
+  discount: 0,
+  discountCode: null,
   total: 1_140_000,
   customer: { name: "Wanjiku", email: "wanjiku@example.com" },
   items: [

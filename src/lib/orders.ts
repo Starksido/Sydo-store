@@ -11,6 +11,7 @@ import { and, asc, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { orderCancelReason, orderItems, orders, orderStatus, payments, user } from "@/db/schema";
 import type { Delivery } from "@/lib/delivery";
+import { MIN_ORDER_TOTAL, normalizeCode, type DiscountProblem } from "@/lib/discounts";
 import { pgError } from "@/lib/pg-error";
 import { stockDecrementCtes, stockIncrementCtes } from "@/lib/stock";
 
@@ -30,7 +31,9 @@ export type PlaceOrderResult =
   | { ok: true; reference: string }
   /** A line is gone, changed quantity or its size or product was removed since checkout was rendered. */
   | { ok: false; reason: "cart-changed" }
-  | { ok: false; reason: "out-of-stock"; shortages: OrderShortage[] };
+  | { ok: false; reason: "out-of-stock"; shortages: OrderShortage[] }
+  /** The discount code doesn't apply (any more); nothing was ordered. */
+  | { ok: false; reason: "discount"; problem: DiscountProblem; minSubtotal: number };
 
 const REFERENCE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; // 32 symbols, no 0/O/1/I
 
@@ -70,13 +73,21 @@ async function findOrderReference(userId: string, checkoutKey: string) {
 }
 
 /**
- * Orders exactly `lines` from the user's cart, at current product prices, all or nothing.
- * Idempotent per `checkoutKey`: repeating a call (a double click, or a retry after a lost response)
- * returns the order the first one created. Throws on invalid input.
+ * Orders exactly `lines` from the user's cart, at current product prices, all or nothing, with
+ * `discountCode` if given: in the same statement it locks the code, checks it (active, in its time
+ * window, under its limits, the minimum subtotal, once per customer) and takes a redemption, or
+ * orders nothing if it doesn't apply. Idempotent per `checkoutKey`: repeating a call (a double
+ * click, or a retry after a lost response) returns the order the first one created. Throws on
+ * invalid input.
  */
 export async function placeOrder(
   userId: string,
-  { checkoutKey, lines, delivery }: { checkoutKey: string; lines: CheckoutLine[]; delivery: Delivery },
+  {
+    checkoutKey,
+    lines,
+    delivery,
+    discountCode = null,
+  }: { checkoutKey: string; lines: CheckoutLine[]; delivery: Delivery; discountCode?: string | null },
 ): Promise<PlaceOrderResult> {
   if (lines.length === 0) throw new Error("placeOrder: no lines");
   if (new Set(lines.map((line) => line.lineId)).size !== lines.length) {
@@ -92,6 +103,7 @@ export async function placeOrder(
   if (existing) return { ok: true, reference: existing };
 
   const payload = JSON.stringify(lines.map(({ lineId, quantity }) => ({ line_id: lineId, quantity })));
+  const code = discountCode ? normalizeCode(discountCode) : null;
   let rows: {
     line_id: number;
     matched: boolean;
@@ -101,6 +113,8 @@ export async function placeOrder(
     requested: number;
     available: number;
     reference: string | null;
+    discount_problem: DiscountProblem | null;
+    min_subtotal: number | null;
   }[];
   try {
     ({ rows } = await db.execute<(typeof rows)[number]>(sql`
@@ -141,16 +155,63 @@ export async function placeOrder(
         from matched
         group by 1
       ),
-      ${stockDecrementCtes()},
+      ${stockDecrementCtes({
+        between: sql`
+      -- The code is locked after the sizes (verdict reads every locked size first), in the same
+      -- order as the expiry sweep, so concurrent orders and sweeps can't deadlock.
+      code as (
+        select c.*
+        from discount_codes c, verdict
+        where ${code}::text is not null and upper(c.code) = ${code}::text
+        for update of c
+      ),
+      priced as (
+        select sum(l.price::bigint * m.quantity)::bigint as subtotal
+        from matched m
+        join locked l on l.id = m.variant_id
+      ),
+      discount_check as (
+        select c.id, c.code, c.min_subtotal, p.subtotal,
+          case
+            when ${code}::text is null then null
+            when c.id is null or not c.active then 'invalid'
+            when c.starts_at > now() then 'not-started'
+            when c.ends_at <= now() then 'ended'
+            when c.max_redemptions is not null and c.redemptions >= c.max_redemptions then 'used-up'
+            when p.subtotal < c.min_subtotal then 'minimum'
+            when c.once_per_customer and exists (
+              select 1 from orders o
+              where o.user_id = ${userId} and o.discount_code_id = c.id and o.status <> 'expired'
+            ) then 'already-used'
+          end as problem,
+          -- Kept in step with discountAmount: rounded down to a whole shilling, total at least KES 1.
+          case when c.id is null then 0
+            else greatest(0, least(
+              case c.kind when 'percent' then floor(p.subtotal * c.value / 10000) * 100 else c.value end,
+              p.subtotal - ${MIN_ORDER_TOTAL}
+            ))
+          end::bigint as discount
+        from priced p
+        left join code c on true
+      )`,
+        guard: sql`(select problem is null from discount_check)`,
+      })},
       new_order as (
-        insert into orders (reference, user_id, checkout_key, total, delivery_name, delivery_phone,
-          delivery_county, delivery_town, delivery_address)
+        insert into orders (reference, user_id, checkout_key, subtotal, discount, total, discount_code_id,
+          discount_code, delivery_name, delivery_phone, delivery_county, delivery_town, delivery_address)
         select ${createReference()}, ${userId}, ${checkoutKey}::uuid,
-          (select sum(l.price::bigint * m.quantity) from matched m join locked l on l.id = m.variant_id),
+          d.subtotal, d.discount, d.subtotal - d.discount, d.id, d.code,
           ${delivery.fullName}, ${delivery.phone}, ${delivery.county}, ${delivery.town}, ${delivery.address}
-        from verdict v
-        where v.ok
-        returning id, reference
+        from verdict v, discount_check d
+        where v.ok and d.problem is null
+        returning id, reference, discount_code_id
+      ),
+      redeemed as (
+        update discount_codes c
+        set redemptions = c.redemptions + 1, updated_at = now()
+        from new_order o
+        where c.id = o.discount_code_id
+        returning c.id
       ),
       new_items as (
         insert into order_items (order_id, product_id, variant_id, product_name, sku, size, unit_price, quantity)
@@ -168,7 +229,9 @@ export async function placeOrder(
       )
       select m.line_id, m.ok as matched, m.variant_id, coalesce(l.name, m.product_name) as name,
         coalesce(l.label, m.size) as size, coalesce(r.quantity, m.quantity)::int as requested,
-        coalesce(l.stock, 0)::int as available, (select reference from new_order) as reference
+        coalesce(l.stock, 0)::int as available, (select reference from new_order) as reference,
+        (select problem from discount_check) as discount_problem,
+        (select min_subtotal::float8 from discount_check) as min_subtotal
       from matched m
       left join req r on r.variant_id = m.variant_id and m.ok
       left join locked l on l.id = m.variant_id
@@ -193,6 +256,10 @@ export async function placeOrder(
   }
 
   const shortages = new Map<number, OrderShortage>();
+  const stockOk = rows.every((row) => row.available >= row.requested);
+  if (stockOk && rows[0]?.discount_problem) {
+    return { ok: false, reason: "discount", problem: rows[0].discount_problem, minSubtotal: rows[0].min_subtotal ?? 0 };
+  }
   for (const row of rows) {
     if (row.available < row.requested && !shortages.has(row.variant_id!)) {
       shortages.set(row.variant_id!, {

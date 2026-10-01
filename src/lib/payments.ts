@@ -184,7 +184,7 @@ export async function confirmPayment(reference: string): Promise<ConfirmPaymentR
   const paidAt = (transaction.paidAt ?? new Date()).toISOString();
   const { rows } = await db.execute<{ previous_status: string; payment_reference: string | null; applied: number }>(sql`
     with o as (
-      select id, status, payment_reference
+      select id, status, payment_reference, discount_code_id
       from orders
       where id = ${attempt.orderId}
       for update
@@ -209,6 +209,15 @@ export async function confirmPayment(reference: string): Promise<ConfirmPaymentR
       insert into order_events (order_id, from_status, to_status)
       select o.id, o.status, 'paid' from o, paid
       returning id
+    ),
+    -- Expiry gave the order's discount redemption back; a late payment takes it again (even past
+    -- the code's limit: the customer has paid).
+    retaken as (
+      update discount_codes c
+      set redemptions = c.redemptions + 1, updated_at = now()
+      from o, paid
+      where o.status = 'expired' and c.id = o.discount_code_id
+      returning c.id
     ),
     -- The first time this payment succeeds. If it didn't pay the order (already paid, cancelled, or
     -- expired and sold out), the money is owed back: recorded as a refund due, in the same statement.
@@ -303,7 +312,7 @@ export async function expireUnpaidOrders({ limit = 100 }: { limit?: number } = {
         limit ${limit}
         for update skip locked
       )
-      returning o.id, o.reference
+      returning o.id, o.reference, o.discount_code_id
     ),
     expired_event as (
       insert into order_events (order_id, from_status, to_status)
@@ -316,7 +325,21 @@ export async function expireUnpaidOrders({ limit = 100 }: { limit?: number } = {
       where oi.order_id in (select id from expired) and oi.variant_id is not null
       group by oi.variant_id
     ),
-    ${stockIncrementCtes()}
+    ${stockIncrementCtes()},
+    -- Expired orders give their discount redemptions back. After the stock, in the same lock order as
+    -- placeOrder (sizes, then the code).
+    released as (
+      update discount_codes c
+      set redemptions = greatest(c.redemptions - r.n, 0), updated_at = now()
+      from (
+        select discount_code_id, count(*)::int as n
+        from expired
+        where discount_code_id is not null and (select count(*) from restock_locked) >= 0
+        group by discount_code_id
+      ) r
+      where c.id = r.discount_code_id
+      returning c.id
+    )
     select reference, (select count(*) from restock_upd)::int as restocked_variants
     from expired
     order by reference

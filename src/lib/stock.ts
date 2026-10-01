@@ -34,9 +34,11 @@ function isPositiveInt(value: unknown): value is number {
  * `req` row has a variant with enough stock, so a row with a null or unknown `variant_id` fails the
  * whole request; `upd` then changes nothing. An empty `req` counts as ok, so callers must refuse
  * empty requests themselves. `locked` also holds each variant's label and product id, and its
- * product's name, SKU and price, for callers that record them.
+ * product's name, SKU and price, for callers that record them. A caller can put its own CTEs
+ * between `verdict` and `upd` (`between`, which may read `locked`), and a further condition on
+ * them (`guard`) that must hold for `upd` to change anything.
  */
-export function stockDecrementCtes(): SQL {
+export function stockDecrementCtes({ between, guard }: { between?: SQL; guard?: SQL } = {}): SQL {
   return sql`
     locked as (
       select v.id, v.stock, v.label, v.product_id, p.name, p.sku, p.price
@@ -51,12 +53,13 @@ export function stockDecrementCtes(): SQL {
       from req r
       join locked l on l.id = r.variant_id
       where l.stock >= r.quantity
-    ),
+    ),${between ? sql`
+    ${between},` : sql``}
     upd as (
       update product_variants v
       set stock = v.stock - r.quantity
       from req r, verdict
-      where v.id = r.variant_id and verdict.ok
+      where v.id = r.variant_id and verdict.ok${guard ? sql` and ${guard}` : sql``}
       returning v.id
     )`;
 }

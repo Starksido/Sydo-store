@@ -18,9 +18,11 @@ type Props = {
   /** The cart lines shown in the summary, which are exactly what gets ordered. */
   lines: CheckoutLine[];
   defaultName: string;
+  /** The discount code applied in the summary, or null. */
+  discountCode: string | null;
 };
 
-export function CheckoutForm({ checkoutKey, lines, defaultName }: Props) {
+export function CheckoutForm({ checkoutKey, lines, defaultName, discountCode }: Props) {
   const router = useRouter();
   const { setCount } = useCartCount();
 
@@ -65,6 +67,7 @@ export function CheckoutForm({ checkoutKey, lines, defaultName }: Props) {
       </h2>
       <input type="hidden" name="checkoutKey" value={checkoutKey} />
       <input type="hidden" name="lines" value={JSON.stringify(lines)} />
+      {discountCode && <input type="hidden" name="discountCode" value={discountCode} />}
 
       <div className="mt-6 space-y-6">
         <label className="block">
@@ -153,9 +156,15 @@ export function CheckoutForm({ checkoutKey, lines, defaultName }: Props) {
               ))}
             </ul>
           )}
-          <Link href="/cart" className="link mt-3 inline-block text-ink">
-            Review your bag
-          </Link>
+          {state.discountProblem ? (
+            <Link href="/checkout" className="link mt-3 inline-block text-ink">
+              Remove the code
+            </Link>
+          ) : (
+            <Link href="/cart" className="link mt-3 inline-block text-ink">
+              Review your bag
+            </Link>
+          )}
         </div>
       )}
 

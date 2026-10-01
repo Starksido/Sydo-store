@@ -20,6 +20,9 @@ async function loadOrder(reference: string): Promise<OrderEmailData | undefined>
   if (!order) return undefined;
   return {
     reference: order.reference,
+    subtotal: order.subtotal,
+    discount: order.discount,
+    discountCode: order.discountCode,
     total: order.total,
     customer: order.customer,
     items: order.items.map((item) => ({

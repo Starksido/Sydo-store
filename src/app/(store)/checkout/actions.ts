@@ -5,6 +5,7 @@ import { after } from "next/server";
 
 import { getCart } from "@/lib/cart";
 import { parseDelivery, type DeliveryField } from "@/lib/delivery";
+import { discountProblemMessage } from "@/lib/discounts";
 import { placeOrder, type CheckoutLine } from "@/lib/orders";
 import { expireUnpaidOrders, startPayment, type StartPaymentResult } from "@/lib/payments";
 import { requireSession } from "@/lib/session";
@@ -15,7 +16,7 @@ export type DeliveryValues = Record<DeliveryField, string>;
 export type PlaceOrderState =
   | { status: "idle" }
   | { status: "invalid"; values: DeliveryValues; errors: Partial<Record<DeliveryField, string>> }
-  | { status: "error"; values: DeliveryValues; message: string; items?: string[] }
+  | { status: "error"; values: DeliveryValues; message: string; items?: string[]; discountProblem?: boolean }
   /** Only returned when payment couldn't be started; otherwise the action redirects to Paystack. */
   | { status: "placed"; reference: string; count: number };
 
@@ -64,7 +65,8 @@ export async function placeOrderAction(_: PlaceOrderState, formData: FormData): 
     return { status: "error", values, message: CART_CHANGED };
   }
 
-  const result = await placeOrder(user.id, { checkoutKey, lines, delivery: delivery.delivery });
+  const code = String(formData.get("discountCode") ?? "").trim().slice(0, 40) || null;
+  const result = await placeOrder(user.id, { checkoutKey, lines, delivery: delivery.delivery, discountCode: code });
   if (result.ok) {
     // Returns the stock of other customers' unpaid orders, between the scheduled sweeps. A small
     // batch, so each checkout makes at most a few Paystack checks; the scheduled sweep does the rest.
@@ -89,6 +91,14 @@ export async function placeOrderAction(_: PlaceOrderState, formData: FormData): 
     return { status: "placed", reference: result.reference, count };
   }
   if (result.reason === "cart-changed") return { status: "error", values, message: CART_CHANGED };
+  if (result.reason === "discount") {
+    return {
+      status: "error",
+      values,
+      message: `${discountProblemMessage(result.problem, result.minSubtotal)} Nothing has been ordered: remove the code to continue without it.`,
+      discountProblem: true,
+    };
+  }
   return {
     status: "error",
     values,

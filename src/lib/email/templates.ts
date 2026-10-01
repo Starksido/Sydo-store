@@ -88,6 +88,10 @@ export function existingAccountContent({ name, signInUrl, resetUrl }: { name: st
 
 export type OrderEmailData = {
   reference: string;
+  subtotal: number;
+  /** Taken off by a discount code; 0 for none. */
+  discount: number;
+  discountCode: string | null;
   total: number;
   customer: { name: string; email: string };
   items: { name: string; size: string | null; quantity: number; unitPrice: number }[];
@@ -107,6 +111,12 @@ function itemRows(order: OrderEmailData): [string, string][] {
       `${item.name}${item.size ? `, ${item.size}` : ""} × ${item.quantity}`,
       formatPrice(item.unitPrice * item.quantity),
     ]),
+    ...(order.discount > 0
+      ? [
+          ["Subtotal", formatPrice(order.subtotal)] as [string, string],
+          [`Discount${order.discountCode ? ` (${order.discountCode})` : ""}`, `−${formatPrice(order.discount)}`] as [string, string],
+        ]
+      : []),
     ["Total", formatPrice(order.total)],
   ];
 }

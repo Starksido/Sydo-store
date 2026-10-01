@@ -53,6 +53,9 @@ export function OrderDetail({
               quantity: item.quantity,
               unitPrice: item.unitPrice,
             }))}
+            subtotal={order.subtotal}
+            discount={order.discount}
+            discountCode={order.discountCode}
             total={order.total}
           />
         </aside>

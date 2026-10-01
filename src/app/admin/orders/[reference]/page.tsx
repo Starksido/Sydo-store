@@ -88,6 +88,9 @@ export default async function AdminOrderPage({ params, searchParams }: PageProps
               quantity: item.quantity,
               unitPrice: item.unitPrice,
             }))}
+            subtotal={order.subtotal}
+            discount={order.discount}
+            discountCode={order.discountCode}
             total={order.total}
           />
         </aside>

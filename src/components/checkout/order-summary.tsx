@@ -10,13 +10,19 @@ export type OrderSummaryItem = {
   unitPrice: number;
 };
 
-/** Items and totals, shared by checkout and the order confirmation. */
+/** Items and totals, shared by checkout and the order pages. Amounts in KES cents. */
 export function OrderSummary({
   items,
+  subtotal,
+  discount = 0,
+  discountCode = null,
   total,
   children,
 }: {
   items: OrderSummaryItem[];
+  subtotal: number;
+  discount?: number;
+  discountCode?: string | null;
   total: number;
   children?: React.ReactNode;
 }) {
@@ -41,8 +47,14 @@ export function OrderSummary({
       <dl className="mt-6 space-y-3 border-t border-line-strong pt-6 text-sm">
         <div className="flex justify-between gap-6">
           <dt>Subtotal</dt>
-          <dd>{formatPrice(total)}</dd>
+          <dd>{formatPrice(subtotal)}</dd>
         </div>
+        {discount > 0 && (
+          <div className="flex justify-between gap-6">
+            <dt>Discount{discountCode && <span className="text-muted"> ({discountCode})</span>}</dt>
+            <dd>−{formatPrice(discount)}</dd>
+          </div>
+        )}
         <div className="flex justify-between gap-6">
           <dt>Shipping</dt>
           <dd>Complimentary</dd>
