@@ -153,3 +153,29 @@ export async function getCartQuantities(userId: string) {
     .where(eq(carts.userId, userId));
   return Object.fromEntries(rows.map((row) => [row.id, row.quantity]));
 }
+
+/**
+ * Writes a line into the guest cart of `tokenHash` (creating the cart), without stock checks, like
+ * `createCartLine`. Returns the line id.
+ */
+export async function createGuestCartLine(tokenHash: string, productId: number, quantity: number, size: string | null = null) {
+  const [cart] = await db
+    .insert(carts)
+    .values({ tokenHash })
+    .onConflictDoUpdate({ target: carts.tokenHash, set: { updatedAt: sql`now()` } })
+    .returning({ id: carts.id });
+  const [variant] = await db
+    .select({ id: productVariants.id })
+    .from(productVariants)
+    .where(
+      and(
+        eq(productVariants.productId, productId),
+        size === null ? isNull(productVariants.label) : eq(productVariants.label, size),
+      ),
+    );
+  const [line] = await db
+    .insert(cartItems)
+    .values({ cartId: cart.id, productId, variantId: variant?.id ?? null, productName: "Guest name", size, quantity })
+    .returning({ id: cartItems.id });
+  return line.id;
+}

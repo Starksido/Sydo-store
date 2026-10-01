@@ -12,8 +12,8 @@ export const metadata: Metadata = { title: "Checkout" };
 
 export default async function CheckoutPage() {
   const { user } = await requireSession("/checkout");
-  await reconcileCart(user.id);
-  const { lines } = await getCart(user.id);
+  await reconcileCart({ userId: user.id });
+  const { lines } = await getCart({ userId: user.id });
 
   // Sold-out and removed lines stay in the bag but aren't ordered. What's listed here is exactly
   // what the form submits, at the saved quantities.

@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
+import { deleteStaleGuestCarts } from "@/lib/cart";
 import { expireUnpaidOrders } from "@/lib/payments";
 
 function digest(value: string) {
@@ -16,11 +17,13 @@ function isAuthorized(request: Request) {
 }
 
 /**
- * Expires unpaid orders past their payment window and returns their stock. Call it every 10–15
- * minutes from a scheduler (GitHub Actions, cron-job.org, Vercel Cron) with the CRON_SECRET.
+ * Expires unpaid orders past their payment window and returns their stock, and deletes guest bags
+ * untouched for 30 days. Call it every 10–15 minutes from a scheduler (GitHub Actions, cron-job.org,
+ * Vercel Cron) with the CRON_SECRET.
  */
 export async function GET(request: Request) {
   if (!isAuthorized(request)) return new Response("Unauthorized", { status: 401 });
   const expired = await expireUnpaidOrders();
-  return Response.json({ expired: expired.length });
+  const guestCarts = await deleteStaleGuestCarts();
+  return Response.json({ expired: expired.length, guestCarts });
 }

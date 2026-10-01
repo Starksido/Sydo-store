@@ -4,8 +4,8 @@ import Link from "next/link";
 
 import { CartLineControls } from "@/components/cart/cart-line-controls";
 import { formatPrice } from "@/lib/catalog";
-import { getCart, reconcileCart, type CartLine } from "@/lib/cart";
-import { requireSession } from "@/lib/session";
+import { getCart, reconcileCart, type Cart, type CartLine } from "@/lib/cart";
+import { getCartOwner } from "@/lib/cart-owner";
 
 export const metadata: Metadata = { title: "Shopping bag" };
 
@@ -18,10 +18,14 @@ function lineNotice(line: CartLine, adjusted: boolean) {
   return null;
 }
 
+const EMPTY: Cart = { lines: [], count: 0, subtotal: 0 };
+
+// Guests have a bag too (kept by a cookie); checkout asks them to sign in, which merges it into theirs.
 export default async function CartPage() {
-  const { user } = await requireSession("/cart");
-  const adjusted = await reconcileCart(user.id);
-  const { lines, count, subtotal } = await getCart(user.id);
+  const owner = await getCartOwner();
+  const adjusted = owner ? await reconcileCart(owner) : new Set<number>();
+  const { lines, count, subtotal } = owner ? await getCart(owner) : EMPTY;
+  const guest = !owner || !("userId" in owner);
 
   if (lines.length === 0) {
     return (
@@ -118,9 +122,23 @@ export default async function CartPage() {
             </dl>
             <div className="mt-6 border-t border-line-strong pt-6">
               {count > 0 ? (
-                <Link href="/checkout" className="btn btn-primary w-full">
-                  Checkout
-                </Link>
+                guest ? (
+                  <>
+                    <Link href="/sign-in?next=%2Fcheckout" className="btn btn-primary w-full">
+                      Sign in to check out
+                    </Link>
+                    <p className="mt-3 text-sm text-muted">
+                      Your bag comes with you when you sign in.{" "}
+                      <Link href="/sign-up?next=%2Fcheckout" className="link">
+                        Create an account
+                      </Link>
+                    </p>
+                  </>
+                ) : (
+                  <Link href="/checkout" className="btn btn-primary w-full">
+                    Checkout
+                  </Link>
+                )
               ) : (
                 <p className="text-sm text-muted">Nothing in your bag is available to order right now.</p>
               )}

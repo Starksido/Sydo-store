@@ -141,19 +141,29 @@ export const stockAdjustments = pgTable(
   ],
 );
 
-/** One cart per signed-in user, created on first add. */
-export const carts = pgTable("carts", {
-  id: integer().primaryKey().generatedAlwaysAsIdentity(),
-  userId: text("user_id")
-    .notNull()
-    .unique()
-    .references(() => user.id, { onDelete: "cascade" }),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow()
-    .$onUpdate(() => new Date()),
-});
+/**
+ * One cart per signed-in user, or per guest, created on first add. A guest's cart is found by the
+ * SHA-256 hash of the random token in their `cart` cookie (the token itself is never stored); it's
+ * merged into the user's cart when they sign in, and deleted after 30 days untouched.
+ */
+export const carts = pgTable(
+  "carts",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    /** Null for a guest's cart. */
+    userId: text("user_id")
+      .unique()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /** Hex SHA-256 of the guest's cookie token. Null for a user's cart. */
+    tokenHash: text("token_hash").unique(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [check("carts_one_owner", sql`(${table.userId} is null) <> (${table.tokenHash} is null)`)],
+);
 
 /**
  * One row per size (variant). No price column: prices are always read from `products`. A line's

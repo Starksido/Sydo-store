@@ -9,8 +9,9 @@ type CartCount = { count: number; setCount: (count: number) => void };
 const CartCountContext = createContext<CartCount>({ count: 0, setCount: () => {} });
 
 /**
- * Header bag count. Pages are static, so the count is fetched in the browser and refetched when
- * the signed-in user changes. Cart actions return the new count and call `setCount` directly.
+ * Header bag count, for users and guests. Pages are static, so the count is fetched in the browser
+ * and refetched when the signed-in user changes (signing in merges a guest's bag; signing out leaves
+ * an empty one). Cart actions return the new count and call `setCount` directly.
  */
 export function CartCountProvider({ children }: { children: React.ReactNode }) {
   const [count, setCount] = useState(0);
@@ -18,7 +19,7 @@ export function CartCountProvider({ children }: { children: React.ReactNode }) {
   const userId = session?.user.id;
 
   useEffect(() => {
-    if (isPending || !userId) return;
+    if (isPending) return;
     let cancelled = false;
     fetch("/api/cart/count", { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : { count: 0 }))
@@ -29,10 +30,7 @@ export function CartCountProvider({ children }: { children: React.ReactNode }) {
     };
   }, [userId, isPending]);
 
-  // Guests always see 0, including right after signing out.
-  return (
-    <CartCountContext value={{ count: userId ? count : 0, setCount }}>{children}</CartCountContext>
-  );
+  return <CartCountContext value={{ count, setCount }}>{children}</CartCountContext>;
 }
 
 export function useCartCount() {

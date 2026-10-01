@@ -43,7 +43,7 @@ describe("GET /api/cron/expire-orders", () => {
     const response = await call("Bearer test-cron-secret");
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ expired: 1 });
+    expect(await response.json()).toEqual({ expired: 1, guestCarts: 0 });
     expect((await getOrderRow(reference)).status).toBe("expired");
     expect(await getStock(product)).toBe(5);
   });

@@ -85,7 +85,7 @@ export async function placeOrderAction(_: PlaceOrderState, formData: FormData): 
     }
     if (payment.ok) redirect(payment.authorizationUrl);
     // Lines left out of the order (sold out, removed) stay in the bag.
-    const { count } = await getCart(user.id);
+    const { count } = await getCart({ userId: user.id });
     return { status: "placed", reference: result.reference, count };
   }
   if (result.reason === "cart-changed") return { status: "error", values, message: CART_CHANGED };

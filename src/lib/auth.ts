@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 
 import { eq } from "drizzle-orm";
@@ -9,8 +10,10 @@ import { user as users } from "@/db/schema";
 import { appUrl } from "@/lib/app-url";
 import { authLogger } from "@/lib/auth-logger";
 import { inBackground } from "@/lib/background";
+import { mergeGuestCart } from "@/lib/cart";
 import { trySendEmail } from "@/lib/email/send";
 import { existingAccountContent, resetPasswordContent, verifyEmailContent } from "@/lib/email/templates";
+import { GUEST_CART_COOKIE, guestCookieOptions, hashGuestToken, readGuestToken } from "@/lib/guest-cart-token";
 
 const MIN_SECRET_BYTES = 32;
 const GENERATE_HINT = "Generate one with `npx auth secret` or `openssl rand -base64 32`.";
@@ -90,6 +93,22 @@ export const auth = betterAuth({
       // it, so the role can only be changed in the database.
       role: { type: "string", required: true, defaultValue: "user", input: false },
     },
+  },
+  hooks: {
+    // Whenever a session starts (sign-in, or the link in the confirmation email), a guest's bag from
+    // the `cart` cookie joins the user's and the cookie is cleared. A failed merge doesn't fail the
+    // sign-in: the cookie stays, so the next sign-in tries again.
+    after: createAuthMiddleware(async (ctx) => {
+      const session = ctx.context.newSession;
+      const token = session && readGuestToken(ctx.getCookie(GUEST_CART_COOKIE));
+      if (!session || !token) return;
+      try {
+        await mergeGuestCart(hashGuestToken(token), session.user.id);
+        ctx.setCookie(GUEST_CART_COOKIE, "", guestCookieOptions(0));
+      } catch (error) {
+        console.error("[cart] could not merge the guest bag on sign-in", error);
+      }
+    }),
   },
   // Logs the cause of failed database queries, not just "Failed query".
   logger: authLogger,
