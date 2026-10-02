@@ -43,3 +43,23 @@ export function authErrorMessage(mode: AuthFormMode, error: AuthClientError) {
   if (mode === "sign-in" && error.status === 401) return "Incorrect email or password.";
   return "Something went wrong. Please try again.";
 }
+
+/**
+ * Why a Google sign-in came back to /sign-in with `?error=`. Our own wording, never Google's or
+ * Better Auth's.
+ */
+export function googleErrorMessage(code: string) {
+  switch (code) {
+    // An account with this email exists but isn't confirmed, so it wasn't linked (it could have
+    // been made by someone else). Resetting the password confirms the email.
+    case "account_not_linked":
+      return "An account with this email already exists but isn't confirmed. Sign in with your password, or use “Forgot your password?” to confirm it, then Google will work too.";
+    case "access_denied":
+      return "Google sign-in was cancelled.";
+    case "email_not_verified":
+      return "Google hasn't confirmed your email address, so we've emailed you a 6-digit code to confirm it.";
+    case "email_not_found":
+      return "Your Google account didn't share an email address, so we couldn't sign you in with it.";
+  }
+  return "Google sign-in didn't work. Please try again, or use your email and password.";
+}

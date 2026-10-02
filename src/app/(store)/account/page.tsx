@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ChangePasswordForm } from "@/components/auth/change-password-form";
 import { SignOutButton } from "@/components/auth/sign-out-button";
 import { orderStatusText } from "@/components/orders/order-status";
+import { hasPassword } from "@/lib/account";
 import { formatOrderDate, formatPrice } from "@/lib/catalog";
 import { listOrdersForUser } from "@/lib/orders";
 import { requireSession } from "@/lib/session";
@@ -20,7 +21,10 @@ function parsePage(value: string | string[] | undefined) {
 export default async function AccountPage({ searchParams }: PageProps<"/account">) {
   const { user } = await requireSession("/account");
   const page = parsePage((await searchParams).page);
-  const { orders, hasMore } = await listOrdersForUser(user.id, { page });
+  const [{ orders, hasMore }, passwordSet] = await Promise.all([
+    listOrdersForUser(user.id, { page }),
+    hasPassword(user.id),
+  ]);
 
   return (
     <section aria-labelledby="account-heading" className="container-prose section">
@@ -99,7 +103,19 @@ export default async function AccountPage({ searchParams }: PageProps<"/account"
           Password
         </h2>
         <div className="mt-6">
-          <ChangePasswordForm />
+          {passwordSet ? (
+            <ChangePasswordForm />
+          ) : (
+            // Signed up with Google: no password yet. A reset link sets one (and signs out elsewhere).
+            <p className="max-w-sm text-muted">
+              You sign in with Google, so there&apos;s no password on your account. To be able to sign in with
+              your email and a password as well,{" "}
+              <Link href="/forgot-password" className="link text-ink">
+                set a password
+              </Link>
+              : we&apos;ll email you a link.
+            </p>
+          )}
         </div>
       </div>
 

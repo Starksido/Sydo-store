@@ -58,12 +58,31 @@ Sign out and in again, then open `/admin`. From there, admins add and remove oth
 | `BETTER_AUTH_SECRET` | `npx auth secret`. At least 32 random bytes; the app refuses to start otherwise. |
 | `BETTER_AUTH_URL` | The site's public URL, e.g. `https://shop.example.com` (`http://localhost:3000` locally). |
 | `NEXT_PUBLIC_BETTER_AUTH_URL` | The same URL. Built into the browser code, so set it before building. |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Optional: "Continue with Google". See [Google sign-in](#google-sign-in). Without them the button is hidden. |
 | `PAYSTACK_SECRET_KEY` | Paystack → Settings → API Keys & Webhooks. `sk_test_…` until you go live. |
 | `PAYSTACK_MODE` | Empty for test mode; `live` (production only) with an `sk_live_…` key. |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Resend → API Keys; `EMAIL_FROM` on a domain verified in Resend, e.g. `Sydo <orders@example.com>`. |
 | `BLOB_READ_WRITE_TOKEN` | Vercel → Storage → Blob. Set for you when the store is connected to the project. |
 | `CRON_SECRET` | Any long random string (`npx auth secret` works). Also stored as a GitHub secret. |
 | `TEST_DATABASE_URL` | In `.env.test.local` only: the empty `*_test` database. |
+
+## Google sign-in
+
+Optional. Customers can then sign up and sign in with their Google account; Google has already
+confirmed their email, so they skip the code. A Google login is linked to an existing account with
+the same email only if that account's email is confirmed.
+
+1. In [Google Cloud Console](https://console.cloud.google.com), create a project (or pick one).
+2. **APIs & Services → OAuth consent screen**: choose **External**, fill in the app name (Sydo),
+   support email and logo, and add the scopes `openid`, `email` and `profile` only.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID**, type **Web
+   application**. Under **Authorized redirect URIs**, add
+   `http://localhost:3000/api/auth/callback/google` for development and
+   `https://<your domain>/api/auth/callback/google` for the live site.
+4. Copy the client ID and secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (`.env.local`, and
+   later Vercel), then restart the app.
+5. While the consent screen is in **Testing**, only the test users you list there can sign in.
+   **Publish** it before launch (email and profile access don't need Google's review).
 
 ## Database changes
 
@@ -86,15 +105,17 @@ browser could read the database. Tests apply the committed migrations to the tes
 4. **Domain.** Add your domain in Vercel, then redeploy so the build picks up the URLs.
 5. **Email.** Add the domain in Resend and set the DNS records it lists (SPF and DKIM), then set
    `EMAIL_FROM` on that domain.
-6. **Paystack.** In the dashboard, set the webhook URL to `https://<your domain>/api/webhooks/paystack`
+6. **Google sign-in** (optional). Add the live redirect URI to your Google OAuth client and set
+   `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in Vercel (see [Google sign-in](#google-sign-in)).
+7. **Paystack.** In the dashboard, set the webhook URL to `https://<your domain>/api/webhooks/paystack`
    and the callback domain to your domain.
-7. **Cron.** In GitHub → Settings → Secrets and variables → Actions, add the variable `SITE_URL`
+8. **Cron.** In GitHub → Settings → Secrets and variables → Actions, add the variable `SITE_URL`
    (`https://<your domain>`, no trailing slash) and the secret `CRON_SECRET` (the same value as in
    Vercel). The workflow in `.github/workflows/expire-orders.yml` then calls
    `/api/cron/expire-orders` every 15 minutes: it expires unpaid orders after 60 minutes (returning
    their stock and discount uses) and deletes guest bags untouched for 30 days. Run it by hand from
    the Actions tab to check it.
-8. **First admin.** Sign up on the live site, confirm your email, and run the SQL in
+9. **First admin.** Sign up on the live site, confirm your email, and run the SQL in
    [Make yourself an admin](#make-yourself-an-admin) on the production database.
 
 ## Going live with real payments

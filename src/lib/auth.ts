@@ -19,6 +19,14 @@ import { checkPassword } from "@/lib/password-strength";
 
 const MIN_SECRET_BYTES = 32;
 
+/**
+ * Google sign-in is on only when both keys are set (Google Cloud Console → APIs & Services →
+ * Credentials → an OAuth client of type "Web application"). Without them the button isn't shown.
+ */
+export function isGoogleSignInEnabled() {
+  return Boolean(process.env.GOOGLE_CLIENT_ID?.trim() && process.env.GOOGLE_CLIENT_SECRET?.trim());
+}
+
 /** How long an email confirmation code works, in seconds. */
 export const EMAIL_CODE_MINUTES = 10;
 
@@ -113,6 +121,22 @@ export const auth = betterAuth({
     sendOnSignIn: true,
     autoSignInAfterVerification: true,
   },
+  // "Continue with Google". Google has confirmed the email, so new customers skip the code. Signing
+  // in with Google links it to an existing account with that email only when both Google and our
+  // account have it confirmed: an unconfirmed account could have been made by someone else.
+  socialProviders: isGoogleSignInEnabled()
+    ? {
+        google: {
+          clientId: process.env.GOOGLE_CLIENT_ID!.trim(),
+          clientSecret: process.env.GOOGLE_CLIENT_SECRET!.trim(),
+          prompt: "select_account",
+          // A Google account whose email Google hasn't confirmed gets no session: we email our own
+          // code instead, as for an email sign-up.
+          requireEmailVerification: true,
+        },
+      }
+    : undefined,
+  account: { accountLinking: { enabled: true, requireLocalEmailVerified: true } },
   user: {
     additionalFields: {
       // "user" or "admin". `input: false`: sign-up always stores the default and update-user refuses
@@ -145,7 +169,7 @@ export const auth = betterAuth({
         }
       }
     }),
-    // Whenever a session starts (sign-in, or the code from the confirmation email), a guest's bag from
+    // Whenever a session starts (sign-in, Google, or the code from the confirmation email), a guest's bag from
     // the `cart` cookie joins the user's and the cookie is cleared. A failed merge doesn't fail the
     // sign-in: the cookie stays, so the next sign-in tries again.
     after: createAuthMiddleware(async (ctx) => {

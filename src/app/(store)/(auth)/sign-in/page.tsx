@@ -2,12 +2,16 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { AuthForm } from "@/components/auth/auth-form";
+import { isGoogleSignInEnabled } from "@/lib/auth";
 import { getSession, safeRedirect } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Sign in" };
 
 export default async function SignInPage({ searchParams }: PageProps<"/sign-in">) {
-  const next = safeRedirect((await searchParams).next);
+  const params = await searchParams;
+  const next = safeRedirect(params.next);
+  // A failed Google sign-in comes back here with ?error=.
+  const googleError = typeof params.error === "string" ? params.error.slice(0, 100) : undefined;
   if (await getSession()) redirect(next);
 
   return (
@@ -17,7 +21,7 @@ export default async function SignInPage({ searchParams }: PageProps<"/sign-in">
           Sign in
         </h1>
         <p className="mt-3 mb-10 text-muted">Access your account and checkout.</p>
-        <AuthForm mode="sign-in" next={next} />
+        <AuthForm mode="sign-in" next={next} google={isGoogleSignInEnabled()} googleError={googleError} />
       </div>
     </section>
   );

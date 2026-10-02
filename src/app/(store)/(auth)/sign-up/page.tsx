@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { AuthForm } from "@/components/auth/auth-form";
+import { isGoogleSignInEnabled } from "@/lib/auth";
 import { getSession, safeRedirect } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Create account" };
@@ -17,7 +18,7 @@ export default async function SignUpPage({ searchParams }: PageProps<"/sign-up">
           Create account
         </h1>
         <p className="mt-3 mb-10 text-muted">Save your details for a faster checkout.</p>
-        <AuthForm mode="sign-up" next={next} />
+        <AuthForm mode="sign-up" next={next} google={isGoogleSignInEnabled()} />
       </div>
     </section>
   );
