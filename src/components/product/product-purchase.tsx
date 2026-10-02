@@ -34,7 +34,7 @@ export function ProductPurchase({ stock, variants }: Props) {
     }
     setAdded(null);
     setError(null);
-    // Guests are redirected to sign in by the action.
+    // Guests' items go into a bag kept by a cookie; signing in later merges it into theirs.
     const chosen = size ?? variants[0];
     startTransition(async () => {
       const result = await addToCart(chosen.id);

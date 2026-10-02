@@ -138,6 +138,27 @@ describe("addCartItem and setCartItemQuantity", () => {
     expect(await setCartItemQuantity({ userId }, lines[1].id, 2)).toBe(false);
   });
 
+  it("stop a line at 99, however much is in stock", async () => {
+    const userId = await createUser();
+    const productId = await createProduct(150);
+    const variantId = await getVariantId(productId);
+    await createCartLine(userId, productId, 98);
+
+    expect(await addCartItem({ userId }, variantId, 1)).toBe(true);
+    expect(await addCartItem({ userId }, variantId, 1)).toBe(false);
+    expect(Object.values(await getCartQuantities(userId))).toEqual([99]);
+  });
+
+  it("show a size by its current label, as the order will record it", async () => {
+    const userId = await createUser();
+    const { productId, variants } = await createSizedProduct([["M", 5]]);
+    await createCartLine(userId, productId, 1, "M");
+    // An admin corrects the label after the customer added it.
+    await db.update(productVariants).set({ label: "L" }).where(eq(productVariants.id, variants.M));
+
+    expect((await getCart({ userId })).lines).toMatchObject([{ size: "L", available: 1 }]);
+  });
+
   it("refuse a size that's sold out or doesn't exist", async () => {
     const userId = await createUser();
     const { variants } = await createSizedProduct([["S", 0]]);

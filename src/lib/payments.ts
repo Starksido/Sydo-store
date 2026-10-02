@@ -279,12 +279,13 @@ export async function expireUnpaidOrders({ limit = 100 }: { limit?: number } = {
   `);
   // Attempts Paystack answered for. Some stay pending (still open on Paystack, or a mismatch).
   const checked: string[] = [];
+  // Orders those late payments paid, emailed once the expiry itself is done.
+  const paid: string[] = [];
   for (const { reference } of open) {
     try {
       const { outcome, orderReference } = await confirmPayment(reference);
       checked.push(reference);
-      // Already in the background (the cron route, or after a checkout), so it can wait for this.
-      if (outcome === "paid" && orderReference) await notifyOrderPaid(orderReference);
+      if (outcome === "paid" && orderReference) paid.push(orderReference);
     } catch (error) {
       console.error(`[payments] could not check ${reference} before expiry`, error);
     }
@@ -344,6 +345,9 @@ export async function expireUnpaidOrders({ limit = 100 }: { limit?: number } = {
     from expired
     order by reference
   `);
+  // After the expiry, so slow email can't hold it up; together, so a batch takes one email's time.
+  // `notifyOrderPaid` logs failures rather than throwing.
+  await Promise.all(paid.map((reference) => notifyOrderPaid(reference)));
   return rows.map((row) => row.reference);
 }
 

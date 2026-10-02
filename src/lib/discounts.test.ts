@@ -151,6 +151,27 @@ describe("placeOrder with a discount code", () => {
     expect(await redemptions(id)).toBe(2);
   });
 
+  it("lets one customer's two simultaneous checkouts use a once-per-customer code only once", async () => {
+    const userId = await createUser();
+    const [a, b] = [await createProduct(5, 100_000), await createProduct(5, 100_000)];
+    const id = await createCode({ code: "TWICE", oncePerCustomer: true });
+    // Two different bag lines, ordered from two tabs at the same moment.
+    const [lineA, lineB] = [await createCartLine(userId, a, 1), await createCartLine(userId, b, 1)];
+
+    const results = await Promise.all(
+      [lineA, lineB].map((lineId) =>
+        placeOrder(userId, { checkoutKey: randomUUID(), lines: [{ lineId, quantity: 1 }], delivery, discountCode: "TWICE" }),
+      ),
+    );
+
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.filter((r) => !r.ok)).toMatchObject([{ reason: "discount", problem: "already-used" }]);
+    expect(await redemptions(id)).toBe(1);
+    expect(await db.$count(orders)).toBe(1);
+    // The refused checkout took no stock.
+    expect([await getStock(a), await getStock(b)].sort()).toEqual([4, 5]);
+  });
+
   it("gives the last use to exactly one of two customers checking out at once", async () => {
     const product = await createProduct(10, 100_000);
     const id = await createCode({ code: "LAST", maxRedemptions: 1 });

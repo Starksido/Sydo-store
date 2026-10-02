@@ -2,7 +2,7 @@
 
 import { refresh } from "next/cache";
 
-import { addCartItem, getCart } from "@/lib/cart";
+import { addToCart } from "@/app/(store)/cart/actions";
 import { getProductsByIds } from "@/lib/products";
 import { requireSession } from "@/lib/session";
 import { setWishlisted } from "@/lib/wishlist";
@@ -36,15 +36,10 @@ export async function moveToBagAction(productId: unknown): Promise<MoveToBagResu
   if (!product) return { ok: false, message: "This product is unavailable." };
   if (product.variants.length !== 1) return { ok: false, message: "Choose a size on the product page." };
 
-  const owner = { userId: user.id };
-  if (!(await addCartItem(owner, product.variants[0].id, 1))) {
-    return {
-      ok: false,
-      message: product.stock > 0 ? `You already have all ${product.stock} available in your bag.` : "This piece is sold out.",
-    };
-  }
+  // The bag's own action, so cart writes stay in one place with the same checks and messages.
+  const added = await addToCart(product.variants[0].id);
+  if (!added.ok) return added;
   await setWishlisted(user.id, product.id, false);
-  const { count } = await getCart(owner);
   refresh();
-  return { ok: true, count };
+  return { ok: true, count: added.count };
 }

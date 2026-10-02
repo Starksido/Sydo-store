@@ -11,7 +11,14 @@ import { carts } from "@/db/schema";
 import { getCart } from "@/lib/cart";
 import { getSession } from "@/lib/session";
 
-import { createProduct, createUser, getCartQuantities, getVariantId, resetCatalog } from "../../../../tests/fixtures";
+import {
+  createCartLine,
+  createProduct,
+  createUser,
+  getCartQuantities,
+  getVariantId,
+  resetCatalog,
+} from "../../../../tests/fixtures";
 
 /** The request's cookies as the browser sent them, and what the action set. */
 const jar = new Map<string, { value: string; options?: Record<string, unknown> }>();
@@ -90,6 +97,18 @@ describe("guest bag", () => {
     expect(jar.get("cart")!.value).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
     expect((await getCart({ tokenHash: sha256(theirs) })).lines).toMatchObject([{ id: line.id, quantity: 1 }]);
+  });
+});
+
+describe("the 99 limit", () => {
+  it("says why an add is refused once a line holds 99", async () => {
+    const userId = await createUser();
+    signedInAs(userId);
+    const productId = await createProduct(150);
+    const variantId = await getVariantId(productId);
+    await createCartLine(userId, productId, 99);
+
+    expect(await addToCart(variantId)).toEqual({ ok: false, message: "You can have up to 99 of one size in your bag." });
   });
 });
 

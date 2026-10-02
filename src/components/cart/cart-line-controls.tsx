@@ -19,7 +19,9 @@ export function CartLineControls({ lineId, name, quantity, maxQuantity }: Props)
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const { setCount } = useCartCount();
-  const options = Math.min(Math.max(maxQuantity, quantity), MAX_OPTIONS);
+  // Up to MAX_OPTIONS choices, but always reaching the current quantity, which can be higher (a
+  // guest bag merged on sign-in, or many adds), so the menu shows what's actually in the bag.
+  const options = Math.max(Math.min(maxQuantity, MAX_OPTIONS), quantity);
 
   const run = (action: () => ReturnType<typeof removeFromCart>) => {
     setError(null);

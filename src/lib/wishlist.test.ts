@@ -7,7 +7,7 @@ import { moveToBagAction, setWishlistedAction } from "@/app/(store)/account/wish
 import { db } from "@/db";
 import { products, user, wishlistItems } from "@/db/schema";
 import { setProductArchived } from "@/lib/admin/products";
-import { requireSession } from "@/lib/session";
+import { getSession, requireSession } from "@/lib/session";
 import { isWishlisted, listWishlist, setWishlisted } from "@/lib/wishlist";
 
 import {
@@ -18,7 +18,8 @@ import {
   resetCatalog,
 } from "../../tests/fixtures";
 
-vi.mock("@/lib/session", () => ({ requireSession: vi.fn() }));
+// "Move to bag" goes through the bag's own action, which reads the session with getSession.
+vi.mock("@/lib/session", () => ({ requireSession: vi.fn(), getSession: vi.fn() }));
 vi.mock("next/cache", () => ({ refresh: vi.fn() }));
 
 beforeEach(resetCatalog);
@@ -28,7 +29,9 @@ afterEach(() => {
 });
 
 function signedInAs(userId: string) {
-  vi.mocked(requireSession).mockResolvedValue({ user: { id: userId } } as Awaited<ReturnType<typeof requireSession>>);
+  const session = { user: { id: userId } } as Awaited<ReturnType<typeof requireSession>>;
+  vi.mocked(requireSession).mockResolvedValue(session);
+  vi.mocked(getSession).mockResolvedValue(session);
 }
 
 describe("setWishlisted", () => {

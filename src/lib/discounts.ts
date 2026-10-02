@@ -89,7 +89,10 @@ export async function previewDiscount(userId: string, code: string, subtotal: nu
 
 // ---------- Admin ----------
 
-/** Every code, newest first, with how many orders used it (expired ones included). */
+/**
+ * Every code, newest first. `redemptions` counts the orders holding the code: unpaid orders that
+ * expired gave theirs back, cancelled ones didn't.
+ */
 export async function listDiscountCodes() {
   return db
     .select({

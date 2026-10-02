@@ -57,7 +57,9 @@ export async function getCart(owner: CartOwner): Promise<Cart> {
   const rows = await db
     .select({
       id: cartItems.id,
-      size: cartItems.size,
+      // The size's current label (an admin may have renamed it), as the order will record it; the
+      // label saved when added only once the size is gone.
+      size: sql<string | null>`case when ${productVariants.id} is null then ${cartItems.size} else ${productVariants.label} end`,
       quantity: cartItems.quantity,
       savedName: cartItems.productName,
       stock: productVariants.stock,
@@ -164,7 +166,7 @@ async function getOrCreateCartId(owner: CartOwner) {
 
 /**
  * Adds `quantity` units of a size, merging with an existing line for it.
- * Returns false (and changes nothing) if the line would exceed the size's stock.
+ * Returns false (and changes nothing) if the line would exceed the size's stock or MAX_LINE_QUANTITY.
  */
 export async function addCartItem(owner: CartOwner, variantId: number, quantity: number) {
   const cartId = await getOrCreateCartId(owner);
@@ -178,7 +180,7 @@ export async function addCartItem(owner: CartOwner, variantId: number, quantity:
       and ${quantity}::int + (
         select coalesce(sum(ci.quantity), 0) from cart_items ci
         where ci.cart_id = ${cartId}::int and ci.variant_id = v.id
-      ) <= v.stock
+      ) <= least(v.stock, ${MAX_LINE_QUANTITY}::int)
     on conflict (cart_id, variant_id) where variant_id is not null
     do update set quantity = cart_items.quantity + excluded.quantity, updated_at = now()
     returning id

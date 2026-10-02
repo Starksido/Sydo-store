@@ -28,6 +28,9 @@ export async function addToCart(variantId: unknown): Promise<CartActionResult> {
 
   const owner = await getCartOwnerForWrite();
   if (!(await addCartItem(owner, variantId, 1))) {
+    if (variant.stock > MAX_LINE_QUANTITY) {
+      return { ok: false, message: `You can have up to ${MAX_LINE_QUANTITY} of one size in your bag.` };
+    }
     return {
       ok: false,
       message:

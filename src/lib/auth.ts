@@ -4,10 +4,8 @@ import { APIError, createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { emailOTP } from "better-auth/plugins";
 
-import { eq } from "drizzle-orm";
-
 import { db } from "@/db";
-import { user as users } from "@/db/schema";
+import { confirmEmail, findUserByEmail } from "@/lib/account";
 import { appUrl } from "@/lib/app-url";
 import { authLogger } from "@/lib/auth-logger";
 import { inBackground } from "@/lib/background";
@@ -100,7 +98,7 @@ export const auth = betterAuth({
       trySendEmail("password-reset", { to: user.email, ...resetPasswordContent({ name: user.name, url }) }),
     // The reset link proved they own the address, and signs them out everywhere else.
     onPasswordReset: async ({ user }) => {
-      await db.update(users).set({ emailVerified: true }).where(eq(users.id, user.id));
+      await confirmEmail(user.id);
     },
     revokeSessionsOnPasswordReset: true,
     onExistingUserSignUp: ({ user }) =>
@@ -152,10 +150,8 @@ export const auth = betterAuth({
           if (ctx.body?.type !== "email-verification") throw new APIError("NOT_FOUND");
           // A confirmed (or unknown) address gets nothing, with the same answer as any other.
           const email = typeof ctx.body.email === "string" ? ctx.body.email.trim().toLowerCase() : "";
-          const [found] = email
-            ? await db.select({ verified: users.emailVerified }).from(users).where(eq(users.email, email))
-            : [];
-          if (!found || found.verified) return ctx.json({ success: true });
+          const found = email ? await findUserByEmail(email) : undefined;
+          if (!found || found.emailVerified) return ctx.json({ success: true });
         }
         return;
       }
@@ -202,7 +198,7 @@ export const auth = betterAuth({
       disableSignUp: true,
       sendVerificationOTP: async ({ email, otp, type }) => {
         if (type !== "email-verification") return;
-        const [found] = await db.select({ name: users.name }).from(users).where(eq(users.email, email));
+        const found = await findUserByEmail(email);
         await trySendEmail("verify-email", {
           to: email,
           ...verifyEmailContent({ name: found?.name ?? "", code: otp, minutes: EMAIL_CODE_MINUTES }),

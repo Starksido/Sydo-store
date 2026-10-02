@@ -355,6 +355,8 @@ export const orders = pgTable(
     discountCodeId: integer("discount_code_id").references(() => discountCodes.id, { onDelete: "restrict" }),
     /** The code as it was when the order was placed. */
     discountCode: text("discount_code"),
+    /** Copied from the code: one use per customer, enforced by `orders_discount_once_per_customer`. */
+    discountOncePerCustomer: boolean("discount_once_per_customer").notNull().default(false),
     deliveryName: text("delivery_name").notNull(),
     /** Normalised to +254XXXXXXXXX. */
     deliveryPhone: text("delivery_phone").notNull(),
@@ -380,6 +382,12 @@ export const orders = pgTable(
     index("orders_user_id_created_at_idx").on(table.userId, table.createdAt),
     index("orders_status_created_at_idx").on(table.status, table.createdAt),
     index("orders_discount_code_id_idx").on(table.discountCodeId),
+    // A once-per-customer code is used at most once per customer, counting every order but expired
+    // ones (their use was given back). Enforced here because placeOrder's own check reads one
+    // snapshot and can't see a second checkout by the same customer committing at the same moment.
+    uniqueIndex("orders_discount_once_per_customer")
+      .on(table.userId, table.discountCodeId)
+      .where(sql`${table.discountOncePerCustomer} and ${table.status} <> 'expired'`),
     check("orders_total_nonnegative", sql`${table.total} >= 0`),
     check("orders_discount_nonnegative", sql`${table.discount} >= 0`),
     check("orders_total_matches", sql`${table.total} = ${table.subtotal} - ${table.discount}`),

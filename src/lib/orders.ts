@@ -171,7 +171,7 @@ export async function placeOrder(
         join locked l on l.id = m.variant_id
       ),
       discount_check as (
-        select c.id, c.code, c.min_subtotal, p.subtotal,
+        select c.id, c.code, c.min_subtotal, p.subtotal, coalesce(c.once_per_customer, false) as once_per_customer,
           case
             when ${code}::text is null then null
             when c.id is null or not c.active then 'invalid'
@@ -198,9 +198,10 @@ export async function placeOrder(
       })},
       new_order as (
         insert into orders (reference, user_id, checkout_key, subtotal, discount, total, discount_code_id,
-          discount_code, delivery_name, delivery_phone, delivery_county, delivery_town, delivery_address)
+          discount_code, discount_once_per_customer, delivery_name, delivery_phone, delivery_county, delivery_town,
+          delivery_address)
         select ${createReference()}, ${userId}, ${checkoutKey}::uuid,
-          d.subtotal, d.discount, d.subtotal - d.discount, d.id, d.code,
+          d.subtotal, d.discount, d.subtotal - d.discount, d.id, d.code, d.once_per_customer,
           ${delivery.fullName}, ${delivery.phone}, ${delivery.county}, ${delivery.town}, ${delivery.address}
         from verdict v, discount_check d
         where v.ok and d.problem is null
@@ -239,8 +240,13 @@ export async function placeOrder(
     `));
   } catch (error) {
     // A concurrent call with the same key committed first; it holds the order.
-    const { code, constraint } = pgError(error);
-    if (code === "23505" && constraint === "orders_user_checkout_key_unique") {
+    const { code: sqlState, constraint } = pgError(error);
+    // The same customer's other checkout, committed at the same moment, used this once-per-customer
+    // code first (the check above can't see it; the unique index catches it). Nothing was ordered.
+    if (sqlState === "23505" && constraint === "orders_discount_once_per_customer") {
+      return { ok: false, reason: "discount", problem: "already-used", minSubtotal: 0 };
+    }
+    if (sqlState === "23505" && constraint === "orders_user_checkout_key_unique") {
       const reference = await findOrderReference(userId, checkoutKey);
       if (reference) return { ok: true, reference };
     }
