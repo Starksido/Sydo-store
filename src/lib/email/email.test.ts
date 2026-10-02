@@ -8,6 +8,7 @@ import {
   type OrderEmailData,
   orderPaidContent,
   orderShippedContent,
+  resetPasswordContent,
   verifyEmailContent,
 } from "@/lib/email/templates";
 
@@ -79,12 +80,19 @@ const order: OrderEmailData = {
 
 describe("email templates", () => {
   it("escape what customers typed in the HTML, and keep it as typed in the text", () => {
-    const content = verifyEmailContent({ name: `"><script>`, url: "http://localhost:3000/api/auth/verify-email?token=a&b=c" });
+    const content = resetPasswordContent({ name: `"><script>`, url: "http://localhost:3000/api/auth/reset-password/x?token=a&b=c" });
     expect(content.html).not.toContain("<script>");
     expect(content.html).toContain("&#34;&#62;&#60;script&#62;");
-    expect(content.html).toContain('href="http://localhost:3000/api/auth/verify-email?token=a&#38;b=c"');
+    expect(content.html).toContain('href="http://localhost:3000/api/auth/reset-password/x?token=a&#38;b=c"');
     expect(content.text).toContain(`Hello "><script>,`);
-    expect(content.text).toContain("http://localhost:3000/api/auth/verify-email?token=a&b=c");
+    expect(content.text).toContain("http://localhost:3000/api/auth/reset-password/x?token=a&b=c");
+  });
+
+  it("put the confirmation code in the subject and body", () => {
+    const content = verifyEmailContent({ name: "Wanjiku", code: "482913", minutes: 10 });
+    expect(content.subject).toBe("482913 is your Sydo confirmation code");
+    expect(content.html).toContain(">482913</p>");
+    expect(content.text).toContain("It works for 10 minutes.");
   });
 
   it("list the items, total and delivery address in the order confirmation", () => {

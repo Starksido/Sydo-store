@@ -70,38 +70,90 @@ async function confirmedUser() {
   return email;
 }
 
-describe("email confirmation", () => {
-  it("signs up without a session and emails a link that confirms the address and signs in", async () => {
-    const email = `${randomUUID()}@example.com`;
-    const callbackURL = "/verify-email?next=%2Fcheckout";
+/** The 6-digit code in a confirmation email. */
+function codeIn(mail: { text: string }) {
+  const match = /^(\d{6})$/m.exec(mail.text);
+  if (!match) throw new Error("no code in the email");
+  return match[1];
+}
 
-    const signUp = await post("/sign-up/email", { name: "Wanjiku <b>", email, password: PASSWORD, callbackURL });
+function verify(email: string, otp: string, cookie?: string) {
+  return post("/email-otp/verify-email", { email, otp }, cookie);
+}
+
+describe("email confirmation", () => {
+  it("signs up without a session and emails a code that confirms the address and signs in", async () => {
+    const email = `${randomUUID()}@example.com`;
+
+    const signUp = await post("/sign-up/email", { name: "Wanjiku <b>", email, password: PASSWORD });
     expect(signUp.status).toBe(200);
     expect(sessionCookie(signUp)).toBe("");
 
     const [mail] = await resend.waitFor(1);
-    expect(mail).toMatchObject({ to: [email], from: "Sydo <orders@example.com>", subject: "Confirm your email for Sydo" });
+    const code = codeIn(mail);
+    expect(mail).toMatchObject({ to: [email], from: "Sydo <orders@example.com>", subject: `${code} is your Sydo confirmation code` });
     expect(mail.html).toContain("Hello Wanjiku &#60;b&#62;,");
+    expect(mail.text).not.toMatch(/https?:\/\//);
     expect(await verifiedOf(email)).toBe(false);
 
-    // Signing in before confirming is refused, and sends a fresh link.
-    const early = await post("/sign-in/email", { email, password: PASSWORD, callbackURL });
+    // Signing in before confirming is refused, and sends a fresh code (the first stops working).
+    const early = await post("/sign-in/email", { email, password: PASSWORD });
     expect(early.status).toBe(403);
     expect(await early.json()).toMatchObject({ code: "EMAIL_NOT_VERIFIED" });
-    await resend.waitFor(2);
+    const [, second] = await resend.waitFor(2);
+    const fresh = codeIn(second);
+    if (fresh !== code) expect(await (await verify(email, code)).json()).toMatchObject({ code: "INVALID_OTP" });
 
-    const opened = await open(linkIn(mail.text, "/api/auth/verify-email"));
-    expect(opened.status).toBe(302);
-    expect(opened.headers.get("location")).toBe(callbackURL);
+    const confirmed = await verify(email, fresh);
+    expect(confirmed.status).toBe(200);
     expect(await verifiedOf(email)).toBe(true);
-    expect(await signedInAs(sessionCookie(opened))).toBe(email);
+    expect(await signedInAs(sessionCookie(confirmed))).toBe(email);
+    // A code works once.
+    expect((await verify(email, fresh)).status).toBe(400);
   });
 
-  it("sends a confirmed or unknown address nothing when a new link is asked for", async () => {
-    const email = await confirmedUser();
-    for (const address of [email, `${randomUUID()}@example.com`]) {
-      const response = await post("/send-verification-email", { email: address, callbackURL: "/verify-email" });
+  it("refuses wrong codes, and the code itself after five wrong tries", async () => {
+    const email = `${randomUUID()}@example.com`;
+    expect((await post("/sign-up/email", { name: "Wanjiku", email, password: PASSWORD })).status).toBe(200);
+    const code = codeIn((await resend.waitFor(1))[0]);
+    const wrong = code === "000000" ? "111111" : "000000";
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      expect(await (await verify(email, wrong)).json()).toMatchObject({ code: "INVALID_OTP" });
+    }
+    expect(await (await verify(email, code)).json()).toMatchObject({ code: "TOO_MANY_ATTEMPTS" });
+    expect(await verifiedOf(email)).toBe(false);
+  });
+
+  it("sends a new code only to an unconfirmed address, answering the same for any", async () => {
+    const unconfirmed = `${randomUUID()}@example.com`;
+    expect((await post("/sign-up/email", { name: "Wanjiku", email: unconfirmed, password: PASSWORD })).status).toBe(200);
+    await resend.waitFor(1);
+    resend.sent.length = 0;
+    const confirmed = await confirmedUser();
+
+    for (const address of [confirmed, `${randomUUID()}@example.com`, unconfirmed]) {
+      const response = await post("/email-otp/send-verification-otp", { email: address, type: "email-verification" });
       expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ success: true });
+    }
+    const sent = await resend.waitFor(1);
+    expect(sent.map((mail) => mail.to)).toEqual([[unconfirmed]]);
+  });
+
+  it("keeps the plugin's other routes closed: no sign-in or password reset by code", async () => {
+    const email = await confirmedUser();
+    for (const [path, body] of [
+      ["/email-otp/send-verification-otp", { email, type: "sign-in" }],
+      ["/email-otp/send-verification-otp", { email, type: "forget-password" }],
+      ["/sign-in/email-otp", { email, otp: "123456" }],
+      ["/email-otp/request-password-reset", { email }],
+      ["/forget-password/email-otp", { email }],
+      ["/email-otp/reset-password", { email, otp: "123456", password: "a-new-long-passphrase-here" }],
+      ["/email-otp/check-verification-otp", { email, type: "sign-in", otp: "123456" }],
+      ["/email-otp/request-email-change", { newEmail: "x@example.com" }],
+    ] as const) {
+      expect((await post(path, body)).status, path).toBe(404);
     }
     expect(resend.sent).toEqual([]);
   });
@@ -159,5 +211,41 @@ describe("password reset", () => {
     });
     expect(response.status).toBe(200);
     expect(resend.sent).toEqual([]);
+  });
+});
+
+describe("weak passwords", () => {
+  it("are refused at sign-up, including ones built from the person's name or email", async () => {
+    for (const [password, name] of [
+      ["123456789", "Wanjiku"],
+      ["password1", "Wanjiku"],
+      ["qwertyuiop", "Wanjiku"],
+      ["Wanjiku2026!", "Wanjiku"],
+    ]) {
+      const response = await post("/sign-up/email", { name, email: `${randomUUID()}@example.com`, password });
+      expect(response.status, password).toBe(400);
+      expect(await response.json(), password).toMatchObject({ code: "WEAK_PASSWORD" });
+    }
+    expect(resend.sent).toEqual([]);
+    expect(await db.$count(user)).toBe(0);
+  });
+
+  it("are refused when resetting or changing a password", async () => {
+    const email = await confirmedUser();
+    const session = sessionCookie(await post("/sign-in/email", { email, password: PASSWORD }));
+
+    const change = await post("/change-password", { currentPassword: PASSWORD, newPassword: "12345678910" }, session);
+    expect(await change.json()).toMatchObject({ code: "WEAK_PASSWORD" });
+
+    await post("/request-password-reset", { email, redirectTo: "/reset-password" });
+    const [mail] = await resend.waitFor(1);
+    const opened = await open(linkIn(mail.text, "/api/auth/reset-password/"));
+    const token = new URL(opened.headers.get("location")!, ORIGIN).searchParams.get("token")!;
+    const reset = await post("/reset-password", { newPassword: "password123", token });
+    expect(await reset.json()).toMatchObject({ code: "WEAK_PASSWORD" });
+
+    // The old password still works; a strong new one is taken.
+    expect((await post("/sign-in/email", { email, password: PASSWORD })).status).toBe(200);
+    expect((await post("/reset-password", { newPassword: "lantern orchard river", token })).status).toBe(200);
   });
 });

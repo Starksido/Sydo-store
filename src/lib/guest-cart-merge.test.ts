@@ -12,7 +12,7 @@ import { getCart } from "@/lib/cart";
 import { hashGuestToken, newGuestToken } from "@/lib/guest-cart-token";
 
 import { createGuestCartLine, createProduct, resetCatalog } from "../../tests/fixtures";
-import { linkIn, mockResend } from "../../tests/resend-mock";
+import { mockResend } from "../../tests/resend-mock";
 
 const ORIGIN = "http://localhost:3000";
 const PASSWORD = "correct-horse-battery";
@@ -75,18 +75,16 @@ describe("merging a guest bag", () => {
     expect(await db.select().from(carts).where(eq(carts.tokenHash, hashGuestToken(token)))).toEqual([]);
   });
 
-  it("happens when the confirmation link signs a new user in", async () => {
+  it("happens when the emailed confirmation code signs a new user in", async () => {
     const email = `${randomUUID()}@example.com`;
     const token = await guestWithBag();
     await signUp(email, `cart=${token}`);
     // Sign-up makes no session, so nothing is merged yet.
     expect((await getCart({ tokenHash: hashGuestToken(token) })).count).toBe(1);
 
-    const response = await auth.handler(
-      new Request(linkIn(resend.sent[0].text, "/api/auth/verify-email"), {
-        headers: { origin: ORIGIN, cookie: `cart=${token}` },
-      }),
-    );
+    const code = /^(\d{6})$/m.exec(resend.sent[0].text)![1];
+    const response = await post("/email-otp/verify-email", { email, otp: code }, `cart=${token}`);
+    expect(response.status).toBe(200);
 
     expect(cartCookie(response)).toMatch(/^cart=;/);
     expect((await getCart({ userId: await userIdOf(email) })).count).toBe(1);

@@ -1,7 +1,8 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { createAuthMiddleware } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
+import { emailOTP } from "better-auth/plugins";
 
 import { eq } from "drizzle-orm";
 
@@ -14,8 +15,27 @@ import { mergeGuestCart } from "@/lib/cart";
 import { trySendEmail } from "@/lib/email/send";
 import { existingAccountContent, resetPasswordContent, verifyEmailContent } from "@/lib/email/templates";
 import { GUEST_CART_COOKIE, guestCookieOptions, hashGuestToken, readGuestToken } from "@/lib/guest-cart-token";
+import { checkPassword } from "@/lib/password-strength";
 
 const MIN_SECRET_BYTES = 32;
+
+/** How long an email confirmation code works, in seconds. */
+export const EMAIL_CODE_MINUTES = 10;
+
+/**
+ * The email-code plugin's endpoints that stay open: sending a confirmation code and checking it.
+ * Its other endpoints (sign-in by code, password reset by code, email change) are refused, so a
+ * password is still needed to sign in and resets stay the emailed link.
+ */
+const OPEN_EMAIL_CODE_PATHS = new Set(["/email-otp/send-verification-otp", "/email-otp/verify-email"]);
+const EMAIL_CODE_PATH = /^\/(email-otp\/|sign-in\/email-otp|forget-password\/email-otp)/;
+
+/** Where a new password arrives, its field, and whose details it mustn't be built from. */
+const NEW_PASSWORD_PATHS: Record<string, { field: string; inputs: string[] }> = {
+  "/sign-up/email": { field: "password", inputs: ["name", "email"] },
+  "/reset-password": { field: "newPassword", inputs: [] },
+  "/change-password": { field: "newPassword", inputs: [] },
+};
 const GENERATE_HINT = "Generate one with `npx auth secret` or `openssl rand -base64 32`.";
 
 /**
@@ -85,13 +105,13 @@ export const auth = betterAuth({
         }),
       }),
   },
+  // Confirmation emails carry a 6-digit code (the email-code plugin below sends them), typed in on
+  // /verify-email; the right code confirms the address and signs the customer in.
   emailVerification: {
     sendOnSignUp: true,
-    // A sign-in with the right password but an unconfirmed email sends a fresh link.
+    // A sign-in with the right password but an unconfirmed email sends a fresh code.
     sendOnSignIn: true,
     autoSignInAfterVerification: true,
-    sendVerificationEmail: ({ user, url }) =>
-      trySendEmail("verify-email", { to: user.email, ...verifyEmailContent({ name: user.name, url }) }),
   },
   user: {
     additionalFields: {
@@ -101,7 +121,31 @@ export const auth = betterAuth({
     },
   },
   hooks: {
-    // Whenever a session starts (sign-in, or the link in the confirmation email), a guest's bag from
+    before: createAuthMiddleware(async (ctx) => {
+      if (EMAIL_CODE_PATH.test(ctx.path)) {
+        if (!OPEN_EMAIL_CODE_PATHS.has(ctx.path)) throw new APIError("NOT_FOUND");
+        if (ctx.path === "/email-otp/send-verification-otp") {
+          if (ctx.body?.type !== "email-verification") throw new APIError("NOT_FOUND");
+          // A confirmed (or unknown) address gets nothing, with the same answer as any other.
+          const email = typeof ctx.body.email === "string" ? ctx.body.email.trim().toLowerCase() : "";
+          const [found] = email
+            ? await db.select({ verified: users.emailVerified }).from(users).where(eq(users.email, email))
+            : [];
+          if (!found || found.verified) return ctx.json({ success: true });
+        }
+        return;
+      }
+      // Weak passwords are refused wherever a new one is set; the forms show a strength meter.
+      const rule = NEW_PASSWORD_PATHS[ctx.path];
+      const password = rule && ctx.body?.[rule.field];
+      if (typeof password === "string") {
+        const inputs = rule.inputs.map((name) => (typeof ctx.body?.[name] === "string" ? ctx.body[name] : null));
+        if (!checkPassword(password, inputs).ok) {
+          throw new APIError("BAD_REQUEST", { code: "WEAK_PASSWORD", message: "Choose a stronger password." });
+        }
+      }
+    }),
+    // Whenever a session starts (sign-in, or the code from the confirmation email), a guest's bag from
     // the `cart` cookie joins the user's and the cookie is cleared. A failed merge doesn't fail the
     // sign-in: the cookie stays, so the next sign-in tries again.
     after: createAuthMiddleware(async (ctx) => {
@@ -121,8 +165,29 @@ export const auth = betterAuth({
   // Emails go out after the response, so answers don't take longer when an email is sent (which
   // would show whether an address has an account).
   advanced: { backgroundTasks: { handler: inBackground } },
-  // Lets `auth.api.*` calls from Server Actions set cookies. Must stay the last plugin.
-  plugins: [nextCookies()],
+  plugins: [
+    // Replaces confirmation links with 6-digit codes. Codes are stored hashed, work for
+    // EMAIL_CODE_MINUTES and allow 5 tries; asking for a new one replaces the old one. Only the
+    // paths in OPEN_EMAIL_CODE_PATHS are reachable (see `hooks.before`).
+    emailOTP({
+      overrideDefaultEmailVerification: true,
+      otpLength: 6,
+      expiresIn: EMAIL_CODE_MINUTES * 60,
+      allowedAttempts: 5,
+      storeOTP: "hashed",
+      disableSignUp: true,
+      sendVerificationOTP: async ({ email, otp, type }) => {
+        if (type !== "email-verification") return;
+        const [found] = await db.select({ name: users.name }).from(users).where(eq(users.email, email));
+        await trySendEmail("verify-email", {
+          to: email,
+          ...verifyEmailContent({ name: found?.name ?? "", code: otp, minutes: EMAIL_CODE_MINUTES }),
+        });
+      },
+    }),
+    // Lets `auth.api.*` calls from Server Actions set cookies. Must stay the last plugin.
+    nextCookies(),
+  ],
 });
 
 export type Session = typeof auth.$Infer.Session;

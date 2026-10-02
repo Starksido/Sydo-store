@@ -4,6 +4,7 @@ import { useActionState } from "react";
 
 import { authErrorMessage } from "@/components/auth/auth-error";
 import { authInput } from "@/components/auth/auth-input";
+import { NewPasswordField } from "@/components/auth/new-password-field";
 import { authClient } from "@/lib/auth-client";
 
 type State = { status: "idle" } | { status: "done" } | { status: "error"; message: string };
@@ -25,11 +26,7 @@ export function ChangePasswordForm() {
         <span className="label">Current password</span>
         <input type="password" name="currentPassword" required autoComplete="current-password" className={authInput} />
       </label>
-      <label className="block">
-        <span className="label">New password</span>
-        <input type="password" name="newPassword" required minLength={8} autoComplete="new-password" className={authInput} />
-        <span className="mt-2 block text-xs text-muted">At least 8 characters.</span>
-      </label>
+      <NewPasswordField name="newPassword" label="New password" />
       {state.status === "done" && (
         <p role="status" className="text-sm text-success">
           Password changed. You&apos;ve been signed out on your other devices.

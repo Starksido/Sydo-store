@@ -14,13 +14,22 @@ export function authErrorMessage(mode: AuthFormMode, error: AuthClientError) {
       return "Enter a valid email address.";
     case "PASSWORD_TOO_SHORT":
       return "Use a password of at least 8 characters.";
+    // Refused by the strength check in src/lib/auth.ts; the form's meter says why.
+    case "WEAK_PASSWORD":
+      return "That password is too easy to guess. Try a longer one, such as a few unrelated words.";
     case "PASSWORD_TOO_LONG":
       return "Use a shorter password.";
     case "INVALID_EMAIL_OR_PASSWORD":
       return "Incorrect email or password.";
-    // Sign-in with the right password before the email is confirmed; a new link was just sent.
+    // Sign-in with the right password before the email is confirmed; a new code was just sent.
     case "EMAIL_NOT_VERIFIED":
-      return "Confirm your email address first. We've sent you a new link.";
+      return "Confirm your email address first. We've sent you a new code.";
+    case "INVALID_OTP":
+      return "That code isn't right. Check the latest email we sent, or ask for a new code.";
+    case "OTP_EXPIRED":
+      return "That code has expired. Ask for a new one.";
+    case "TOO_MANY_ATTEMPTS":
+      return "Too many wrong codes. Ask for a new one.";
     case "INVALID_TOKEN":
       return "This link has expired or has already been used. Ask for a new one.";
     case "INVALID_PASSWORD":

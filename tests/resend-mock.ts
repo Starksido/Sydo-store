@@ -55,9 +55,14 @@ export function mockResend() {
      * background, after the response.
      */
     async waitFor(count: number) {
-      await vi.waitFor(() => {
-        if (sent.length < count) throw new Error(`resend-mock: ${sent.length} of ${count} emails sent`);
-      });
+      // Emails go out in the background after the response, some after a database lookup, so allow
+      // for a slow database rather than vi.waitFor's 1-second default.
+      await vi.waitFor(
+        () => {
+          if (sent.length < count) throw new Error(`resend-mock: ${sent.length} of ${count} emails sent`);
+        },
+        { timeout: 10_000 },
+      );
       return sent;
     },
   };

@@ -15,6 +15,8 @@ type Block =
   | { p: string }
   | { button: { label: string; href: string } }
   | { rows: [string, string][] }
+  /** A one-time code, shown large and spaced out. */
+  | { code: string }
   | { small: string };
 
 /** Lays out blocks of text as a simple one-column email, and the same content as plain text. */
@@ -30,6 +32,11 @@ function compose(subject: string, heading: string, blocks: Block[]): EmailConten
         `<p style="margin:24px 0"><a href="${escape(block.button.href)}" style="display:inline-block;background:#111;color:#fff;padding:14px 24px;text-decoration:none;font-size:12px;letter-spacing:.12em;text-transform:uppercase">${escape(block.button.label)}</a></p>`,
       );
       text.push(`${block.button.label}: ${block.button.href}`, "");
+    } else if ("code" in block) {
+      html.push(
+        `<p style="margin:24px 0;font-size:32px;letter-spacing:.3em;font-family:Menlo,Consolas,monospace">${escape(block.code)}</p>`,
+      );
+      text.push(block.code, "");
     } else if ("rows" in block) {
       const rows = block.rows
         .map(
@@ -57,12 +64,12 @@ function greeting(name: string) {
   return `Hello ${name.trim() || "there"},`;
 }
 
-export function verifyEmailContent({ name, url }: { name: string; url: string }) {
-  return compose(`Confirm your email for ${STORE}`, "Confirm your email", [
+export function verifyEmailContent({ name, code, minutes }: { name: string; code: string; minutes: number }) {
+  return compose(`${code} is your ${STORE} confirmation code`, "Confirm your email", [
     { p: greeting(name) },
-    { p: "Confirm your email address to finish creating your account. The link works for one hour." },
-    { button: { label: "Confirm email", href: url } },
-    { small: "If you didn't create an account, you can ignore this email." },
+    { p: `Enter this code on ${STORE} to confirm your email address. It works for ${minutes} minutes.` },
+    { code },
+    { small: "If you didn't create an account, you can ignore this email. Never share this code with anyone." },
   ]);
 }
 

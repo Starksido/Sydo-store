@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useActionState } from "react";
 
 import { authErrorMessage } from "@/components/auth/auth-error";
-import { authInput } from "@/components/auth/auth-input";
+import { NewPasswordField } from "@/components/auth/new-password-field";
 import { authClient } from "@/lib/auth-client";
 
 type State = { status: "idle" } | { status: "done" } | { status: "error"; message: string; expired: boolean };
@@ -34,11 +34,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
 
   return (
     <form action={submit} className="space-y-6">
-      <label className="block">
-        <span className="label">New password</span>
-        <input type="password" name="password" required minLength={8} autoComplete="new-password" className={authInput} />
-        <span className="mt-2 block text-xs text-muted">At least 8 characters.</span>
-      </label>
+      <NewPasswordField name="password" label="New password" />
       {state.status === "error" && (
         <p role="alert" className="text-sm text-error">
           {state.message}{" "}

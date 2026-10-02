@@ -6,6 +6,7 @@ import { useActionState } from "react";
 
 import { authErrorMessage } from "@/components/auth/auth-error";
 import { authInput as input, verifyEmailPath } from "@/components/auth/auth-input";
+import { NewPasswordField } from "@/components/auth/new-password-field";
 import { authClient } from "@/lib/auth-client";
 
 /** Email and password form for both sign-in and sign-up. `next` must already be a safe path. */
@@ -14,17 +15,20 @@ export function AuthForm({ mode, next }: { mode: "sign-in" | "sign-up"; next: st
   const isSignUp = mode === "sign-up";
 
   const [error, submit, pending] = useActionState(async (_: string | null, formData: FormData) => {
-    const email = String(formData.get("email"));
+    const email = String(formData.get("email")).trim();
     const password = String(formData.get("password"));
-    // The link in the confirmation email comes back here, signed in, and goes on to `next`.
-    const callbackURL = verifyEmailPath(next);
     const { error } = isSignUp
-      ? await authClient.signUp.email({ name: String(formData.get("name")), email, password, callbackURL })
-      : await authClient.signIn.email({ email, password, callbackURL });
+      ? await authClient.signUp.email({ name: String(formData.get("name")), email, password })
+      : await authClient.signIn.email({ email, password });
 
+    // The right password but an unconfirmed email: a new code was just sent, so go and type it in.
+    if (error?.code === "EMAIL_NOT_VERIFIED") {
+      router.replace(verifyEmailPath(next, email, true));
+      return null;
+    }
     if (error) return authErrorMessage(mode, error);
-    // A new account has no session until its email is confirmed: tell them to check their inbox.
-    router.replace(isSignUp ? callbackURL : next);
+    // A new account has no session until its email is confirmed with the emailed code.
+    router.replace(isSignUp ? verifyEmailPath(next, email) : next);
     router.refresh();
     return null;
   }, null);
@@ -45,18 +49,14 @@ export function AuthForm({ mode, next }: { mode: "sign-in" | "sign-up"; next: st
         <span className="label">Email address</span>
         <input type="email" name="email" required autoComplete="email" className={input} />
       </label>
-      <label className="block">
-        <span className="label">Password</span>
-        <input
-          type="password"
-          name="password"
-          required
-          minLength={isSignUp ? 8 : undefined}
-          autoComplete={isSignUp ? "new-password" : "current-password"}
-          className={input}
-        />
-        {isSignUp && <span className="mt-2 block text-xs text-muted">At least 8 characters.</span>}
-      </label>
+      {isSignUp ? (
+        <NewPasswordField name="password" label="Password" userInputFields={["name", "email"]} />
+      ) : (
+        <label className="block">
+          <span className="label">Password</span>
+          <input type="password" name="password" required autoComplete="current-password" className={input} />
+        </label>
+      )}
       {!isSignUp && (
         <p className="-mt-3 text-right text-sm">
           <Link href="/forgot-password" className="link text-muted">

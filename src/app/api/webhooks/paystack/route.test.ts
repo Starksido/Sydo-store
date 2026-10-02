@@ -78,9 +78,12 @@ describe("POST /api/webhooks/paystack", () => {
     await deliver(chargeSuccess(payment));
     await deliver(chargeSuccess(payment));
 
-    const [mail] = await resend.waitFor(1);
+    await resend.waitFor(1);
     await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(resend.sent).toHaveLength(1);
+    // Only this order's emails: an earlier test's email, sent in the background, can land late.
+    const forOrder = resend.sent.filter((sent) => sent.subject.includes(reference));
+    expect(forOrder).toHaveLength(1);
+    const [mail] = forOrder;
     expect(mail).toMatchObject({
       to: [expect.stringMatching(/@example.com$/)],
       subject: `Order ${reference} confirmed`,
